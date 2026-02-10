@@ -1,0 +1,957 @@
+{% extends "base.html" %}
+
+{% block title %}xdig详细分析 - 域名安全监控系统{% endblock %}
+
+{% block page_title %}xdig探测到的危险域名详细分析{% endblock %}
+
+{% block page_actions %}
+<button class="btn btn-primary" onclick="refreshAnalysis()">
+    <i class="fas fa-sync-alt"></i> 刷新数据
+</button>
+<button class="btn btn-secondary" onclick="exportAnalysis()">
+    <i class="fas fa-download"></i> 导出报告
+</button>
+<button class="btn btn-secondary" onclick="printPage()">
+    <i class="fas fa-print"></i> 打印
+</button>
+{% endblock %}
+
+{% block content %}
+<!-- 加载状态 -->
+<div id="loading" class="loading-container">
+    <div class="spinner"></div>
+    <p>加载xdig分析数据中...</p>
+</div>
+
+<!-- 错误状态 -->
+<div id="error" class="error-container" style="display: none;">
+    <div class="error-icon">
+        <i class="fas fa-exclamation-triangle"></i>
+    </div>
+    <h3>加载失败</h3>
+    <p id="error-message">无法加载xdig分析数据</p>
+    <button class="btn btn-primary" onclick="loadAnalysisData()">重试</button>
+</div>
+
+<!-- 主要内容 -->
+<div id="main-content" style="display: none;">
+    <!-- 概览统计 -->
+    <div class="stats-grid">
+        <div class="stat-card high">
+            <div class="stat-header">
+                <div>
+                    <div class="stat-title">总危险域名</div>
+                    <div id="total-domains" class="stat-value">0</div>
+                    <div class="stat-change positive">
+                        <i class="fas fa-arrow-up"></i> 实时探测
+                    </div>
+                </div>
+                <div class="stat-icon high">
+                    <i class="fas fa-exclamation-triangle"></i>
+                </div>
+            </div>
+            <div class="stat-description">通过xdig DNS探测发现的存活域名</div>
+        </div>
+
+        <div class="stat-card high">
+            <div class="stat-header">
+                <div>
+                    <div class="stat-title">高风险域名</div>
+                    <div id="high-risk-domains" class="stat-value">0</div>
+                    <div class="stat-change">
+                        <i class="fas fa-shield-alt"></i> 已标记
+                    </div>
+                </div>
+                <div class="stat-icon high">
+                    <i class="fas fa-radiation"></i>
+                </div>
+            </div>
+            <div class="stat-description">被标记为高风险的域名数量</div>
+        </div>
+
+        <div class="stat-card medium">
+            <div class="stat-header">
+                <div>
+                    <div class="stat-title">.com变体</div>
+                    <div id="com-variants" class="stat-value">0</div>
+                    <div class="stat-change">
+                        <i class="fas fa-globe"></i> 通用顶级域
+                    </div>
+                </div>
+                <div class="stat-icon medium">
+                    <i class="fas fa-tag"></i>
+                </div>
+            </div>
+            <div class="stat-description">.com后缀的危险域名变体</div>
+        </div>
+
+        <div class="stat-card info">
+            <div class="stat-header">
+                <div>
+                    <div class="stat-title">探测方法</div>
+                    <div id="detection-method" class="stat-value">xdig</div>
+                    <div class="stat-change">
+                        <i class="fas fa-search"></i> DNS探测
+                    </div>
+                </div>
+                <div class="stat-icon info">
+                    <i class="fas fa-satellite-dish"></i>
+                </div>
+            </div>
+            <div class="stat-description">xdig DNS主动探测技术</div>
+        </div>
+    </div>
+
+    <!-- 详细分析部分 -->
+    <div class="card">
+        <div class="card-header">
+            <h3 class="card-title">
+                <i class="fas fa-chart-line"></i> 详细分析
+            </h3>
+            <div class="card-actions">
+                <button class="btn btn-sm btn-secondary" onclick="toggleAnalysisSections()">
+                    <i class="fas fa-expand"></i> 展开/折叠
+                </button>
+            </div>
+        </div>
+        <div class="card-body">
+            <div id="analysis-sections" class="analysis-sections">
+                <!-- 分析部分将通过JavaScript动态加载 -->
+            </div>
+        </div>
+    </div>
+
+    <!-- 危险域名列表 -->
+    <div class="card">
+        <div class="card-header">
+            <h3 class="card-title">
+                <i class="fas fa-list"></i> 危险域名列表
+            </h3>
+            <div class="filter-options">
+                <input type="text" class="form-control" id="domain-search" 
+                       placeholder="搜索域名..." oninput="filterDomains()">
+                <select class="form-control" id="risk-filter" onchange="filterDomains()">
+                    <option value="">所有风险等级</option>
+                    <option value="high">高风险</option>
+                    <option value="medium">中风险</option>
+                    <option value="low">低风险</option>
+                </select>
+            </div>
+        </div>
+        <div class="card-body">
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>域名</th>
+                            <th>风险等级</th>
+                            <th>风险评分</th>
+                            <th>探测方法</th>
+                            <th>状态</th>
+                            <th>扫描时间</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="dangerous-domains-table">
+                        <tr>
+                            <td colspan="8" class="loading">
+                                <div class="spinner"></div>
+                                加载域名数据...
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="table-footer">
+                <div class="pagination-info">
+                    显示 <span id="showing-count">0</span> 条，共 <span id="total-count">0</span> 条
+                </div>
+                <div class="pagination-controls">
+                    <button class="btn btn-sm btn-secondary" onclick="prevPage()" disabled id="prev-btn">
+                        <i class="fas fa-chevron-left"></i> 上一页
+                    </button>
+                    <span class="page-number" id="page-number">1</span>
+                    <button class="btn btn-sm btn-secondary" onclick="nextPage()" disabled id="next-btn">
+                        下一页 <i class="fas fa-chevron-right"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 域名示例 -->
+    <div class="card">
+        <div class="card-header">
+            <h3 class="card-title">
+                <i class="fas fa-code"></i> 域名示例
+            </h3>
+            <div class="card-actions">
+                <button class="btn btn-sm btn-secondary" onclick="copyAllExamples()">
+                    <i class="fas fa-copy"></i> 复制全部
+                </button>
+            </div>
+        </div>
+        <div class="card-body">
+            <div class="domain-examples-grid" id="domain-examples">
+                <!-- 域名示例将通过JavaScript动态加载 -->
+            </div>
+            <div class="example-description">
+                <p><i class="fas fa-info-circle"></i> 这些是通过xdig DNS探测发现的危险域名示例，所有域名都被标记为高风险。</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- 统计分析 -->
+    <div class="card">
+        <div class="card-header">
+            <h3 class="card-title">
+                <i class="fas fa-chart-pie"></i> 统计分析
+            </h3>
+        </div>
+        <div class="card-body">
+            <div class="stats-charts">
+                <div class="chart-container">
+                    <canvas id="riskChart"></canvas>
+                </div>
+                <div class="chart-container">
+                    <canvas id="domainChart"></canvas>
+                </div>
+            </div>
+            <div class="statistics-summary">
+                <div class="stat-item">
+                    <div class="stat-label">总域名数</div>
+                    <div class="stat-value" id="stat-total-domains">0</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">高风险域名</div>
+                    <div class="stat-value high" id="stat-high-risk">0</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">中风险域名</div>
+                    <div class="stat-value medium" id="stat-medium-risk">0</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">低风险域名</div>
+                    <div class="stat-value low" id="stat-low-risk">0</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">最近扫描</div>
+                    <div class="stat-value" id="stat-recent-scans">0</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">检测到的威胁</div>
+                    <div class="stat-value high" id="stat-threats-detected">0</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// 全局变量
+let analysisData = null;
+let currentPage = 1;
+const pageSize = 20;
+let filteredDomains = [];
+
+// 页面加载完成后初始化
+document.addEventListener('DOMContentLoaded', function() {
+    loadAnalysisData();
+});
+
+// 加载分析数据
+async function loadAnalysisData() {
+    showLoading(true);
+    
+    try {
+        const response = await fetch('/api/xdig/analysis');
+        const result = await response.json();
+        
+        if (result.success) {
+            analysisData = result.data;
+            renderAnalysisData();
+            showMainContent(true);
+        } else {
+            showError(result.error || '加载分析数据失败');
+        }
+    } catch (error) {
+        showError('网络请求失败: ' + error.message);
+    } finally {
+        showLoading(false);
+    }
+}
+
+// 渲染分析数据
+function renderAnalysisData() {
+    if (!analysisData) return;
+    
+    // 更新概览统计
+    document.getElementById('total-domains').textContent = analysisData.summary.total_domains;
+    document.getElementById('high-risk-domains').textContent = analysisData.summary.high_risk_domains;
+    document.getElementById('com-variants').textContent = analysisData.summary.com_variants;
+    document.getElementById('detection-method').textContent = analysisData.summary.detection_method;
+    
+    // 更新统计分析
+    document.getElementById('stat-total-domains').textContent = analysisData.statistics.total_domains;
+    document.getElementById('stat-high-risk').textContent = analysisData.statistics.high_risk;
+    document.getElementById('stat-medium-risk').textContent = analysisData.statistics.medium_risk;
+    document.getElementById('stat-low-risk').textContent = analysisData.statistics.low_risk;
+    document.getElementById('stat-recent-scans').textContent = analysisData.statistics.recent_scans;
+    document.getElementById('stat-threats-detected').textContent = analysisData.statistics.threats_detected;
+    
+    // 渲染分析部分
+    renderAnalysisSections();
+    
+    // 渲染危险域名列表
+    filteredDomains = analysisData.dangerous_domains || [];
+    renderDomainTable();
+    
+    // 渲染域名示例
+    renderDomainExamples();
+    
+    // 初始化图表
+    initCharts();
+}
+
+// 渲染分析部分
+function renderAnalysisSections() {
+    const container = document.getElementById('analysis-sections');
+    if (!container || !analysisData.analysis_sections) return;
+    
+    let html = '';
+    analysisData.analysis_sections.forEach((section, index) => {
+        // 处理内容中的换行符
+        const content = section.content.replace(/\n/g, '<br>');
+        
+        html += `
+            <div class="analysis-section ${index === 0 ? 'expanded' : ''}">
+                <div class="section-header" onclick="toggleSection(${index})">
+                    <h4>
+                        <i class="fas ${section.icon || 'fa-info-circle'}"></i>
+                        ${section.title}
+                    </h4>
+                    <div class="section-toggle">
+                        <i class="fas fa-chevron-${index === 0 ? 'down' : 'right'}"></i>
+                    </div>
+                </div>
+                <div class="section-content" style="display: ${index === 0 ? 'block' : 'none'}">
+                    <div class="section-text">${content}</div>
+                </div>
+            </div>
+        `;
+    });
+    
+    container.innerHTML = html;
+}
+
+// 切换分析部分显示/隐藏
+function toggleSection(index) {
+    const section = document.querySelectorAll('.analysis-section')[index];
+    const content = section.querySelector('.section-content');
+    const toggleIcon = section.querySelector('.section-toggle i');
+    
+    if (content.style.display === 'none') {
+        content.style.display = 'block';
+        toggleIcon.className = 'fas fa-chevron-down';
+        section.classList.add('expanded');
+    } else {
+        content.style.display = 'none';
+        toggleIcon.className = 'fas fa-chevron-right';
+        section.classList.remove('expanded');
+    }
+}
+
+// 切换所有分析部分
+function toggleAnalysisSections() {
+    const sections = document.querySelectorAll('.analysis-section');
+    const firstExpanded = sections[0].classList.contains('expanded');
+    
+    sections.forEach((section, index) => {
+        const content = section.querySelector('.section-content');
+        const toggleIcon = section.querySelector('.section-toggle i');
+        
+        if (firstExpanded) {
+            content.style.display = 'none';
+            toggleIcon.className = 'fas fa-chevron-right';
+            section.classList.remove('expanded');
+        } else {
+            content.style.display = 'block';
+            toggleIcon.className = 'fas fa-chevron-down';
+            section.classList.add('expanded');
+        }
+    });
+}
+
+// 渲染域名表格
+function renderDomainTable() {
+    const tableBody = document.getElementById('dangerous-domains-table');
+    if (!tableBody || !filteredDomains.length) {
+        tableBody.innerHTML = `
+            <tr>
+                <td colspan="8" class="empty-state">
+                    <i class="fas fa-search"></i>
+                    <p>未找到危险域名数据</p>
+                </td>
+            </tr>
+        `;
+        return;
+    }
+    
+    // 计算分页
+    const startIndex = (currentPage - 1) * pageSize;
+    const endIndex = Math.min(startIndex + pageSize, filteredDomains.length);
+    const pageDomains = filteredDomains.slice(startIndex, endIndex);
+    
+    let html = '';
+    pageDomains.forEach((domain, index) => {
+        const globalIndex = startIndex + index + 1;
+        const riskClass = getRiskClass(domain.risk_level);
+        const riskScore = domain.risk_score || 0;
+        
+        html += `
+            <tr>
+                <td>${globalIndex}</td>
+                <td>
+                    <code>${escapeHtml(domain.domain)}</code>
+                </td>
+                <td>
+                    <span class="risk-badge ${riskClass}">${domain.risk_level}</span>
+                </td>
+                <td>
+                    <div class="risk-score">
+                        <div class="score-bar">
+                            <div class="score-fill" style="width: ${riskScore}%"></div>
+                        </div>
+                        <span class="score-value">${riskScore}</span>
+                    </div>
+                </td>
+                <td>${escapeHtml(domain.detection_method || 'unknown')}</td>
+                <td>
+                    <span class="status-badge ${domain.status === 'active' ? 'active' : 'inactive'}">
+                        ${domain.status || 'unknown'}
+                    </span>
+                </td>
+                <td>${escapeHtml(domain.scan_time || '')}</td>
+                <td>
+                    <div class="action-buttons">
+                        <button class="btn btn-sm btn-secondary" onclick="viewDomainDetail('${domain.domain}')">
+                            <i class="fas fa-eye"></i>
+                        </button>
+                        <button class="btn btn-sm btn-secondary" onclick="copyDomain('${domain.domain}')">
+                            <i class="fas fa-copy"></i>
+                        </button>
+                    </div>
+                </td>
+            </tr>
+        `;
+    });
+    
+    tableBody.innerHTML = html;
+    
+    // 更新分页信息
+    updatePagination();
+}
+
+// 过滤域名
+function filterDomains() {
+    const searchText = document.getElementById('domain-search').value.toLowerCase();
+    const riskFilter = document.getElementById('risk-filter').value;
+    
+    if (!analysisData || !analysisData.dangerous_domains) {
+        filteredDomains = [];
+    } else {
+        filteredDomains = analysisData.dangerous_domains.filter(domain => {
+            // 搜索过滤
+            const matchesSearch = !searchText || 
+                domain.domain.toLowerCase().includes(searchText) ||
+                (domain.original_target && domain.original_target.toLowerCase().includes(searchText));
+            
+            // 风险等级过滤
+            const matchesRisk = !riskFilter || domain.risk_level === riskFilter;
+            
+            return matchesSearch && matchesRisk;
+        });
+    }
+    
+    currentPage = 1;
+    renderDomainTable();
+}
+
+// 更新分页信息
+function updatePagination() {
+    const total = filteredDomains.length;
+    const start = (currentPage - 1) * pageSize + 1;
+    const end = Math.min(start + pageSize - 1, total);
+    
+    document.getElementById('showing-count').textContent = end > 0 ? `${start}-${end}` : '0';
+    document.getElementById('total-count').textContent = total;
+    document.getElementById('page-number').textContent = currentPage;
+    
+    // 更新按钮状态
+    document.getElementById('prev-btn').disabled = currentPage <= 1;
+    document.getElementById('next-btn').disabled = end >= total;
+}
+
+// 上一页
+function prevPage() {
+    if (currentPage > 1) {
+        currentPage--;
+        renderDomainTable();
+    }
+}
+
+// 下一页
+function nextPage() {
+    const totalPages = Math.ceil(filteredDomains.length / pageSize);
+    if (currentPage < totalPages) {
+        currentPage++;
+        renderDomainTable();
+    }
+}
+
+// 渲染域名示例
+function renderDomainExamples() {
+    const container = document.getElementById('domain-examples');
+    if (!container || !analysisData.domain_examples) return;
+    
+    let html = '';
+    analysisData.domain_examples.forEach((domain, index) => {
+        html += `
+            <div class="domain-example">
+                <div class="example-header">
+                    <span class="example-number">${index + 1}</span>
+                    <button class="btn btn-sm btn-secondary copy-btn" onclick="copyDomain('${domain}')">
+                        <i class="fas fa-copy"></i>
+                    </button>
+                </div>
+                <div class="example-domain">
+                    <code>${escapeHtml(domain)}</code>
+                </div>
+                <div class="example-risk">
+                    <span class="risk-badge high">high</span>
+                    <span class="risk-score">85</span>
+                </div>
+            </div>
+        `;
+    });
+    
+    container.innerHTML = html;
+}
+
+// 复制域名
+function copyDomain(domain) {
+    navigator.clipboard.writeText(domain).then(() => {
+        showNotification(`已复制域名: ${domain}`, 'success');
+    }).catch(err => {
+        console.error('复制失败:', err);
+        showNotification('复制失败', 'danger');
+    });
+}
+
+// 复制所有示例
+function copyAllExamples() {
+    if (!analysisData.domain_examples) return;
+    
+    const allDomains = analysisData.domain_examples.join('\n');
+    navigator.clipboard.writeText(allDomains).then(() => {
+        showNotification(`已复制 ${analysisData.domain_examples.length} 个域名`, 'success');
+    }).catch(err => {
+        console.error('复制失败:', err);
+        showNotification('复制失败', 'danger');
+    });
+}
+
+// 查看域名详情
+function viewDomainDetail(domain) {
+    showNotification(`查看域名详情: ${domain}（功能开发中）`, 'info');
+    // 实际应用中这里应该跳转到域名详情页面
+}
+
+// 初始化图表
+function initCharts() {
+    // 风险分布图表
+    const riskCtx = document.getElementById('riskChart');
+    if (riskCtx && analysisData) {
+        const riskChart = new Chart(riskCtx, {
+            type: 'doughnut',
+            data: {
+                labels: ['高风险', '中风险', '低风险'],
+                datasets: [{
+                    data: [
+                        analysisData.statistics.high_risk || 0,
+                        analysisData.statistics.medium_risk || 0,
+                        analysisData.statistics.low_risk || 0
+                    ],
+                    backgroundColor: ['#dc3545', '#fd7e14', '#28a745'],
+                    borderWidth: 1
+                }]
+            },
+            options: {
+                responsive: true,
+                plugins: {
+                    legend: {
+                        position: 'right',
+                    },
+                    title: {
+                        display: true,
+                        text: '风险分布'
+                    }
+                }
+            }
+        });
+    }
+    
+    // 域名统计图表
+    const domainCtx = document.getElementById('domainChart');
+    if (domainCtx && analysisData) {
+        const domainChart = new Chart(domainCtx, {
+            type: 'bar',
+            data: {
+                labels: ['总域名', '危险域名', '.com变体'],
+                datasets: [{
+                    label: '数量',
+                    data: [
+                        analysisData.statistics.total_domains || 0,
+                        analysisData.summary.total_domains || 0,
+                        analysisData.summary.com_variants || 0
+                    ],
+                    backgroundColor: ['#007bff', '#dc3545', '#28a745'],
+                    borderWidth: 1
+                }]
+            },
+            options: {
+                responsive: true,
+                scales: {
+                    y: {
+                        beginAtZero: true
+                    }
+                },
+                plugins: {
+                    title: {
+                        display: true,
+                        text: '域名统计'
+                    }
+                }
+            }
+        });
+    }
+}
+
+// 刷新分析数据
+function refreshAnalysis() {
+    showNotification('刷新数据中...', 'info');
+    loadAnalysisData();
+}
+
+// 导出分析报告
+function exportAnalysis() {
+    showNotification('导出报告功能开发中', 'info');
+}
+
+// 打印页面
+function printPage() {
+    window.print();
+}
+
+// 工具函数
+function showLoading(show) {
+    document.getElementById('loading').style.display = show ? 'flex' : 'none';
+}
+
+function showMainContent(show) {
+    document.getElementById('main-content').style.display = show ? 'block' : 'none';
+}
+
+function showError(message) {
+    document.getElementById('error-message').textContent = message;
+    document.getElementById('error').style.display = 'block';
+    document.getElementById('main-content').style.display = 'none';
+}
+
+function getRiskClass(riskLevel) {
+    switch (riskLevel) {
+        case 'high': return 'high';
+        case 'medium': return 'medium';
+        case 'low': return 'low';
+        default: return 'unknown';
+    }
+}
+
+function escapeHtml(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+function showNotification(message, type = 'info') {
+    // 使用现有通知系统或创建临时通知
+    const notification = document.createElement('div');
+    notification.className = `alert alert-${type} notification`;
+    notification.innerHTML = `
+        <i class="fas fa-${type === 'success' ? 'check-circle' : type === 'warning' ? 'exclamation-triangle' : type === 'danger' ? 'times-circle' : 'info-circle'}"></i>
+        ${escapeHtml(message)}
+    `;
+    
+    document.querySelector('.notifications').appendChild(notification);
+    
+    setTimeout(() => {
+        notification.remove();
+    }, 3000);
+}
+</script>
+
+<style>
+/* 自定义样式 */
+.loading-container, .error-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 3rem;
+    text-align: center;
+}
+
+.loading-container .spinner {
+    width: 3rem;
+    height: 3rem;
+    border: 3px solid rgba(0, 0, 0, 0.1);
+    border-radius: 50%;
+    border-top-color: #007bff;
+    animation: spin 1s linear infinite;
+    margin-bottom: 1rem;
+}
+
+.error-container .error-icon {
+    font-size: 3rem;
+    color: #dc3545;
+    margin-bottom: 1rem;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+.analysis-sections {
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.analysis-section {
+    border: 1px solid #dee2e6;
+    border-bottom: none;
+}
+
+.analysis-section:last-child {
+    border-bottom: 1px solid #dee2e6;
+}
+
+.analysis-section.expanded {
+    background-color: #f8f9fa;
+}
+
+.section-header {
+    padding: 1rem 1.5rem;
+    background-color: white;
+    cursor: pointer;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    transition: background-color 0.2s;
+}
+
+.analysis-section.expanded .section-header {
+    background-color: #f8f9fa;
+}
+
+.section-header:hover {
+    background-color: #f8f9fa;
+}
+
+.section-header h4 {
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-weight: 600;
+}
+
+.section-toggle {
+    color: #6c757d;
+}
+
+.section-content {
+    padding: 1.5rem;
+    background-color: white;
+}
+
+.analysis-section.expanded .section-content {
+    background-color: #f8f9fa;
+}
+
+.section-text {
+    line-height: 1.6;
+    color: #495057;
+}
+
+.section-text br {
+    margin-bottom: 0.5rem;
+    display: block;
+    content: "";
+}
+
+.domain-examples-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 1rem;
+    margin-bottom: 1rem;
+}
+
+.domain-example {
+    border: 1px solid #dee2e6;
+    border-radius: 6px;
+    padding: 1rem;
+    background-color: white;
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.domain-example:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+}
+
+.example-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.5rem;
+}
+
+.example-number {
+    background-color: #007bff;
+    color: white;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.8rem;
+    font-weight: bold;
+}
+
+.copy-btn {
+    padding: 0.25rem 0.5rem;
+    font-size: 0.8rem;
+}
+
+.example-domain {
+    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+    font-size: 0.9rem;
+    margin-bottom: 0.5rem;
+    word-break: break-all;
+}
+
+.example-risk {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.risk-score {
+    font-weight: bold;
+    color: #dc3545;
+}
+
+.stats-charts {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 2rem;
+    margin-bottom: 2rem;
+}
+
+.chart-container {
+    background-color: white;
+    padding: 1rem;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.statistics-summary {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 1rem;
+    background-color: #f8f9fa;
+    padding: 1.5rem;
+    border-radius: 8px;
+}
+
+.stat-item {
+    text-align: center;
+}
+
+.stat-label {
+    font-size: 0.9rem;
+    color: #6c757d;
+    margin-bottom: 0.25rem;
+}
+
+.stat-value {
+    font-size: 1.5rem;
+    font-weight: bold;
+    color: #007bff;
+}
+
+.stat-value.high { color: #dc3545; }
+.stat-value.medium { color: #fd7e14; }
+.stat-value.low { color: #28a745; }
+
+.risk-score {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.score-bar {
+    flex-grow: 1;
+    height: 6px;
+    background-color: #e9ecef;
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+.score-fill {
+    height: 100%;
+    background-color: #dc3545;
+    transition: width 0.3s;
+}
+
+.score-value {
+    font-weight: bold;
+    min-width: 2rem;
+    text-align: right;
+}
+
+.notification {
+    position: fixed;
+    top: 1rem;
+    right: 1rem;
+    z-index: 1000;
+    animation: slideIn 0.3s ease-out;
+}
+
+@keyframes slideIn {
+    from {
+        transform: translateX(100%);
+        opacity: 0;
+    }
+    to {
+        transform: translateX(0);
+        opacity: 1;
+    }
+}
+</style>
+{% endblock %}

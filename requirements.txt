@@ -1,0 +1,37 @@
+idna==3.11
+python-dateutil==2.9.0.post0
+python-whois==0.9.6
+six==1.17.0
+whois==1.20240129.2
+
+# HTTP扫描器核心依赖
+aiohttp==3.9.1
+beautifulsoup4==4.12.2
+lxml==4.9.3
+
+# 威胁情报API客户端
+requests==2.31.0
+
+# 其他核心依赖
+certifi==2023.11.17
+cryptography==41.0.7
+
+# Web应用依赖
+Flask==3.0.0
+Flask-CORS==4.0.0
+Jinja2==3.1.2
+Werkzeug==3.0.1
+
+# 数据库依赖
+SQLAlchemy==2.0.23
+psycopg2-binary==2.9.9
+alembic==1.13.1
+
+# 数据可视化
+matplotlib==3.8.2
+numpy==1.26.2
+
+# 可选依赖（按需安装）
+# pandas==2.1.4
+# elasticsearch==8.12.0
+# urllib3==2.1.0

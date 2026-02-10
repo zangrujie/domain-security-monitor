@@ -1,0 +1,230 @@
+{% extends "base.html" %}
+
+{% block title %}仪表板 - 域名安全监控系统{% endblock %}
+
+{% block page_title %}域名安全监控仪表板{% endblock %}
+
+{% block page_actions %}
+<button class="btn btn-primary" onclick="startNewScan()">
+    <i class="fas fa-plus"></i> 新建扫描
+</button>
+<button class="btn btn-secondary" onclick="refreshDashboard()">
+    <i class="fas fa-sync-alt"></i> 刷新
+</button>
+{% endblock %}
+
+{% block content %}
+<!-- 统计卡片 -->
+<div class="stats-grid">
+    <div class="stat-card low">
+        <div class="stat-header">
+            <div>
+                <div class="stat-title">监控域名总数</div>
+                <div id="total-domains" class="stat-value">--</div>
+                <div class="stat-change positive">
+                    <i class="fas fa-arrow-up"></i> <span id="domain-change">--</span> 本周新增
+                </div>
+            </div>
+            <div class="stat-icon low">
+                <i class="fas fa-globe"></i>
+            </div>
+        </div>
+        <div class="stat-description">已注册并监控的域名总数</div>
+    </div>
+
+    <div class="stat-card high">
+        <div class="stat-header">
+            <div>
+                <div class="stat-title">高风险域名</div>
+                <div id="high-risk-domains" class="stat-value">--</div>
+                <div class="stat-change negative">
+                    <i class="fas fa-arrow-up"></i> <span id="high-risk-change">--</span> 需要关注
+                </div>
+            </div>
+            <div class="stat-icon high">
+                <i class="fas fa-exclamation-triangle"></i>
+            </div>
+        </div>
+        <div class="stat-description">威胁等级为高或严重的域名</div>
+    </div>
+
+    <div class="stat-card info">
+        <div class="stat-header">
+            <div>
+                <div class="stat-title">最近扫描</div>
+                <div id="recent-scans" class="stat-value">--</div>
+                <div class="stat-change positive">
+                    <i class="fas fa-clock"></i> <span id="scan-time">--</span> 前
+                </div>
+            </div>
+            <div class="stat-icon info">
+                <i class="fas fa-search"></i>
+            </div>
+        </div>
+        <div class="stat-description">最近24小时内完成的扫描任务</div>
+    </div>
+
+    <div class="stat-card medium">
+        <div class="stat-header">
+            <div>
+                <div class="stat-title">威胁检测</div>
+                <div id="threats-detected" class="stat-value">--</div>
+                <div class="stat-change positive">
+                    <i class="fas fa-shield-alt"></i> <span id="threat-change">--</span> 已拦截
+                </div>
+            </div>
+            <div class="stat-icon medium">
+                <i class="fas fa-virus"></i>
+            </div>
+        </div>
+        <div class="stat-description">检测到的恶意域名和威胁</div>
+    </div>
+</div>
+
+<!-- 图表区域 -->
+<div class="card-grid">
+    <!-- 风险分布图表 -->
+    <div class="card">
+        <div class="card-header">
+            <h3 class="card-title">风险分布</h3>
+            <div class="chart-actions">
+                <select id="risk-time-range" class="form-control" style="width: auto;">
+                    <option value="day">今日</option>
+                    <option value="week" selected>本周</option>
+                    <option value="month">本月</option>
+                </select>
+            </div>
+        </div>
+        <div class="card-body">
+            <div class="chart-container">
+                <canvas id="riskDistributionChart"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <!-- 最近扫描活动 -->
+    <div class="card">
+        <div class="card-header">
+            <h3 class="card-title">最近扫描活动</h3>
+            <button class="btn btn-sm btn-secondary" onclick="loadRecentDomains()">
+                <i class="fas fa-sync-alt"></i>
+            </button>
+        </div>
+        <div class="card-body">
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>域名</th>
+                            <th>扫描时间</th>
+                            <th>风险等级</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="recent-domains-table">
+                        <tr>
+                            <td colspan="4" class="loading">
+                                <div class="spinner"></div>
+                                加载中...
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 快速扫描表单 -->
+<div class="card">
+    <div class="card-header">
+        <h3 class="card-title">快速域名扫描</h3>
+    </div>
+    <div class="card-body">
+        <form id="quick-scan-form" onsubmit="return startQuickScan(event)">
+            <div class="form-group">
+                <label class="form-label" for="target-domain">目标域名</label>
+                <input type="text" class="form-control" id="target-domain" 
+                       placeholder="例如: example.com" required>
+                <small class="form-text">输入要扫描的域名，系统将生成变体并进行全面检测</small>
+            </div>
+            <div class="form-group">
+                <label class="form-label">扫描选项</label>
+                <div style="display: flex; gap: 20px; flex-wrap: wrap;">
+                    <label style="display: flex; align-items: center; gap: 8px;">
+                        <input type="checkbox" name="scan-options" value="dns" checked> DNS探测
+                    </label>
+                    <label style="display: flex; align-items: center; gap: 8px;">
+                        <input type="checkbox" name="scan-options" value="http" checked> HTTP扫描
+                    </label>
+                    <label style="display: flex; align-items: center; gap: 8px;">
+                        <input type="checkbox" name="scan-options" value="whois" checked> WHOIS查询
+                    </label>
+                    <label style="display: flex; align-items: center; gap: 8px;">
+                        <input type="checkbox" name="scan-options" value="threat" checked> 威胁情报
+                    </label>
+                </div>
+            </div>
+            <div class="form-group">
+                <button type="submit" class="btn btn-success">
+                    <i class="fas fa-play"></i> 开始扫描
+                </button>
+                <button type="button" class="btn btn-secondary" onclick="showAdvancedOptions()">
+                    <i class="fas fa-cog"></i> 高级选项
+                </button>
+            </div>
+        </form>
+        <div id="scan-progress" style="display: none; margin-top: 20px;">
+            <div class="alert alert-info">
+                <i class="fas fa-spinner fa-spin"></i>
+                <span id="scan-message">正在扫描域名...</span>
+            </div>
+            <div class="progress" style="height: 10px; background-color: #f0f0f0; border-radius: 5px; overflow: hidden;">
+                <div id="scan-progress-bar" style="height: 100%; background-color: #3498db; width: 0%; transition: width 0.3s;"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 系统状态 -->
+<div class="card">
+    <div class="card-header">
+        <h3 class="card-title">系统状态</h3>
+        <button class="btn btn-sm btn-secondary" onclick="checkSystemStatus()">
+            <i class="fas fa-redo"></i> 检查
+        </button>
+    </div>
+    <div class="card-body">
+        <div class="system-status-widget">
+            <div class="status-item">
+                <span class="status-label">数据库连接:</span>
+                <span id="db-status" class="status-value status-online">检查中...</span>
+            </div>
+            <div class="status-item">
+                <span class="status-label">VirusTotal API:</span>
+                <span id="vt-status" class="status-value status-online">检查中...</span>
+            </div>
+            <div class="status-item">
+                <span class="status-label">扫描引擎:</span>
+                <span id="engine-status" class="status-value status-online">检查中...</span>
+            </div>
+            <div class="status-item">
+                <span class="status-label">存储空间:</span>
+                <span id="storage-status" class="status-value status-online">检查中...</span>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+<script>
+// 页面加载完成后初始化
+document.addEventListener('DOMContentLoaded', function() {
+    loadDashboardData();
+    checkSystemStatus();
+    setInterval(refreshDashboard, 30000); // 每30秒刷新一次
+});
+</script>
+{% endblock %}
