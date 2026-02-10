@@ -45,7 +45,7 @@ A comprehensive domain security monitoring system designed to detect and analyze
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/yourusername/domain-security-monitor.git
+git clone https://github.com/zangrujie/domain-security-monitor.git
 cd domain-security-monitor
 
 # 2. Create virtual environment
@@ -126,7 +126,7 @@ python modules/data_pipeline.py --domain example.com
 
 ### API Usage
 
-The system provides a RESTful API for programmatic access:
+The system provides a comprehensive RESTful API for programmatic access. See [API Documentation](API.md) for full details.
 
 ```http
 # Dashboard statistics
@@ -143,6 +143,8 @@ Content-Type: application/json
 # Data analysis
 GET /api/data/analysis?type=registration_time
 ```
+
+**For complete API documentation, see [API.md](API.md)**
 
 ## 🏗️ Project Structure
 
@@ -250,8 +252,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 📞 Support
 
-- **Issues**: Use the [GitHub Issues](https://github.com/yourusername/domain-security-monitor/issues)
-- **Documentation**: Check the [USAGE_GUIDE.md](USAGE_GUIDE.md)
+- **Issues**: Use the [GitHub Issues](https://github.com/zangrujie/domain-security-monitor/issues)
+- **Documentation**: Check the [USAGE_GUIDE.md](USAGE_GUIDE.md) and [DEPLOYMENT.md](DEPLOYMENT.md)
 - **Email**: For security issues, please contact security@example.com
 
 ---
