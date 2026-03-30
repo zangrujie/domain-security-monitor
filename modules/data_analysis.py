@@ -55,8 +55,6 @@ class DataAnalyzer:
             包含时间分布数据的字典
         """
         try:
-            cursor = self.conn.cursor()
-            
             # 模拟数据 - 因为数据库为空
             year_month_dist = {
                 '2025-01': 150, '2025-02': 180, '2025-03': 220, '2025-04': 190,

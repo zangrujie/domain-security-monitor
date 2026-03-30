@@ -79,7 +79,7 @@
                             <input type="checkbox" id="select-all" onchange="toggleSelectAll(this)">
                         </th>
                         <th>域名</th>
-                        <th>原目标</th>
+                        <th>入口说明</th>
                         <th>风险等级</th>
                         <th>扫描时间</th>
                         <th>变体数量</th>
@@ -195,6 +195,9 @@ let currentPage = 1;
 let pageSize = 20;
 let totalDomains = 0;
 let selectedDomains = new Set();
+let expandedOriginalTargets = new Set();
+let variantsCache = new Map();
+let variantsLoadingTargets = new Set();
 
 // 页面加载完成后初始化
 document.addEventListener('DOMContentLoaded', function() {
@@ -226,7 +229,8 @@ async function loadDomains() {
         // 构建查询参数
         const params = new URLSearchParams({
             page: currentPage,
-            page_size: pageSize
+            page_size: pageSize,
+            include_variants: 'false'
         });
         
         const searchValue = document.getElementById('domain-search').value;
@@ -237,6 +241,11 @@ async function loadDomains() {
         const riskFilter = document.getElementById('risk-filter').value;
         if (riskFilter) {
             params.append('risk_level', riskFilter);
+        }
+
+        const statusFilter = document.getElementById('status-filter').value;
+        if (statusFilter) {
+            params.append('status', statusFilter);
         }
         
         const response = await fetch(`/api/domains?${params}`);
@@ -255,6 +264,11 @@ async function loadDomains() {
                     const riskClass = getRiskClass(domain.risk_level);
                     const riskText = getRiskText(domain.risk_level);
                     const isSelected = selectedDomains.has(domain.domain);
+                    const originalTarget = (domain.original_target || domain.domain || '').trim();
+                    const targetKey = getTargetKey(originalTarget);
+                    const encodedTarget = encodeURIComponent(originalTarget);
+                    const isExpanded = expandedOriginalTargets.has(targetKey);
+                    const toggleTitle = isExpanded ? '收起伪域名列表' : '展开伪域名列表';
                     
                     html += `
                         <tr>
@@ -265,14 +279,14 @@ async function loadDomains() {
                             </td>
                             <td>
                                 <div class="domain-cell">
-                                    <a href="/api/domains/${encodeURIComponent(domain.domain)}" class="domain-link">
-                                        ${escapeHtml(domain.domain)}
+                                    <a href="/analysis/original-target/${encodeURIComponent(domain.original_target || domain.domain)}" class="domain-link">
+                                        ${escapeHtml(domain.original_target || domain.domain)}
                                     </a>
                                     <br>
-                                    <small class="domain-id">${domain.domain}</small>
+                                    <small class="domain-id">原始域名</small>
                                 </div>
                             </td>
-                            <td>${escapeHtml(domain.original_target || domain.domain)}</td>
+                            <td>点击域名进入该原始域名的伪域名分析页</td>
                             <td>
                                 <span class="risk-badge ${riskClass}">${riskText}</span>
                             </td>
@@ -280,19 +294,32 @@ async function loadDomains() {
                             <td>${domain.variant_count || 0}</td>
                             <td>
                                 <div class="action-buttons">
-                                    <button class="btn btn-sm btn-secondary" onclick="viewDomain('${escapeHtml(domain.domain)}')">
+                                    <button class="btn btn-sm btn-secondary" title="${toggleTitle}" onclick="toggleVariants('${encodedTarget}')">
+                                        <i class="fas ${isExpanded ? 'fa-chevron-down' : 'fa-chevron-right'}"></i>
+                                    </button>
+                                    <button class="btn btn-sm btn-secondary" onclick="viewDomain('${escapeJsString(domain.domain)}')">
                                         <i class="fas fa-eye"></i>
                                     </button>
-                                    <button class="btn btn-sm btn-secondary" onclick="scanDomain('${escapeHtml(domain.domain)}')">
+                                    <button class="btn btn-sm btn-secondary" onclick="scanDomain('${escapeJsString(domain.domain)}')">
                                         <i class="fas fa-search"></i>
                                     </button>
-                                    <button class="btn btn-sm btn-danger" onclick="deleteDomain('${escapeHtml(domain.domain)}')">
+                                    <button class="btn btn-sm btn-danger" onclick="deleteDomain('${escapeJsString(domain.domain)}')">
                                         <i class="fas fa-trash"></i>
                                     </button>
                                 </div>
                             </td>
                         </tr>
                     `;
+
+                    if (isExpanded) {
+                        html += `
+                            <tr class="variants-row">
+                                <td colspan="7">
+                                    ${renderVariantsRowContent(originalTarget)}
+                                </td>
+                            </tr>
+                        `;
+                    }
                 });
                 tableBody.innerHTML = html;
             } else {
@@ -323,6 +350,174 @@ async function loadDomains() {
             </tr>
         `;
     }
+}
+
+function getTargetKey(target) {
+    return (target || '').trim().toLowerCase();
+}
+
+function escapeJsString(value) {
+    return String(value || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+}
+
+function getStatusText(status) {
+    switch ((status || '').toLowerCase()) {
+        case 'active': return '活跃';
+        case 'inactive': return '不活跃';
+        case 'monitoring': return '监控中';
+        default: return '未知';
+    }
+}
+
+function getStatusClass(status) {
+    switch ((status || '').toLowerCase()) {
+        case 'active': return 'risk-low';
+        case 'inactive': return 'risk-medium';
+        case 'monitoring': return 'risk-critical';
+        default: return 'risk-medium';
+    }
+}
+
+function renderVariantsRowContent(originalTarget) {
+    const targetKey = getTargetKey(originalTarget);
+
+    if (variantsLoadingTargets.has(targetKey)) {
+        return `
+            <div class="loading" style="padding: 16px 0;">
+                <div class="spinner"></div>
+                正在加载伪域名明细...
+            </div>
+        `;
+    }
+
+    const payload = variantsCache.get(targetKey);
+    if (!payload) {
+        return '<div class="loading" style="padding: 16px 0;">伪域名数据准备中...</div>';
+    }
+
+    if (payload.error) {
+        return `
+            <div class="empty-state" style="padding: 16px 0;">
+                <i class="fas fa-exclamation-triangle"></i>
+                <p>伪域名数据加载失败: ${escapeHtml(payload.error)}</p>
+                <button class="btn btn-secondary" onclick="reloadVariants('${encodeURIComponent(originalTarget)}')">
+                    <i class="fas fa-redo"></i> 重试
+                </button>
+            </div>
+        `;
+    }
+
+    const variants = Array.isArray(payload.variants) ? payload.variants : [];
+    const summary = payload.summary || {};
+    if (variants.length === 0) {
+        return `
+            <div class="empty-state" style="padding: 16px 0;">
+                <i class="fas fa-info-circle"></i>
+                <p>未发现可展示的伪域名数据</p>
+                <small>当前原始域名：${escapeHtml(originalTarget)}，活跃伪域名：${Number(summary.active_variants || 0)}</small>
+            </div>
+        `;
+    }
+
+    let rowsHtml = '';
+    variants.forEach(variant => {
+        rowsHtml += `
+            <tr>
+                <td>${escapeHtml(variant.domain || '-')}</td>
+                <td><span class="risk-badge ${getRiskClass(variant.risk_level)}">${getRiskText(variant.risk_level)}</span></td>
+                <td>${escapeHtml(variant.scan_time || '未扫描')}</td>
+                <td><span class="status-badge ${getStatusClass(variant.status)}">${getStatusText(variant.status)}</span></td>
+                <td>${Number(variant.risk_score || 0).toFixed(1)}</td>
+                <td>
+                    <div class="action-buttons">
+                        <button class="btn btn-sm btn-secondary" onclick="viewDomain('${escapeJsString(variant.domain)}')">
+                            <i class="fas fa-eye"></i>
+                        </button>
+                        <button class="btn btn-sm btn-secondary" onclick="scanDomain('${escapeJsString(variant.domain)}')">
+                            <i class="fas fa-search"></i>
+                        </button>
+                        <button class="btn btn-sm btn-danger" onclick="deleteDomain('${escapeJsString(variant.domain)}')">
+                            <i class="fas fa-trash"></i>
+                        </button>
+                    </div>
+                </td>
+            </tr>
+        `;
+    });
+
+    return `
+        <div style="padding: 12px; background: #fafbfc; border-radius: 8px;">
+            <div style="display: flex; justify-content: space-between; margin-bottom: 10px;">
+                <strong>伪域名明细：${escapeHtml(originalTarget)}</strong>
+                <small>共 ${Number(summary.total_variants || variants.length)} 个，活跃 ${Number(summary.active_variants || 0)} 个</small>
+            </div>
+            <div class="table-container" style="margin: 0;">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>伪域名</th>
+                            <th>风险等级</th>
+                            <th>扫描时间</th>
+                            <th>状态</th>
+                            <th>风险分</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${rowsHtml}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    `;
+}
+
+async function fetchVariantsData(originalTarget) {
+    const targetKey = getTargetKey(originalTarget);
+    variantsLoadingTargets.add(targetKey);
+    try {
+        const response = await fetch(`/api/domains/${encodeURIComponent(originalTarget)}/variants`);
+        const data = await response.json().catch(() => ({}));
+
+        if (!response.ok || !data.success) {
+            throw new Error(data.error || '伪域名数据加载失败');
+        }
+
+        variantsCache.set(targetKey, data.data || { variants: [], summary: {} });
+    } catch (error) {
+        variantsCache.set(targetKey, { variants: [], summary: {}, error: error.message });
+    } finally {
+        variantsLoadingTargets.delete(targetKey);
+    }
+}
+
+async function toggleVariants(encodedOriginalTarget) {
+    const originalTarget = decodeURIComponent(encodedOriginalTarget || '');
+    if (!originalTarget) return;
+
+    const targetKey = getTargetKey(originalTarget);
+    if (expandedOriginalTargets.has(targetKey)) {
+        expandedOriginalTargets.delete(targetKey);
+        loadDomains();
+        return;
+    }
+
+    expandedOriginalTargets.add(targetKey);
+    if (!variantsCache.has(targetKey)) {
+        await fetchVariantsData(originalTarget);
+    }
+    loadDomains();
+}
+
+async function reloadVariants(encodedOriginalTarget) {
+    const originalTarget = decodeURIComponent(encodedOriginalTarget || '');
+    if (!originalTarget) return;
+
+    const targetKey = getTargetKey(originalTarget);
+    variantsCache.delete(targetKey);
+    expandedOriginalTargets.add(targetKey);
+    await fetchVariantsData(originalTarget);
+    loadDomains();
 }
 
 // 更新分页信息
@@ -398,12 +593,6 @@ async function submitAddDomain(event) {
         return false;
     }
     
-    // 验证域名格式
-    if (!isValidDomain(domain)) {
-        showNotification('域名格式不正确', 'warning');
-        return false;
-    }
-    
     try {
         const response = await fetch('/api/scan/start', {
             method: 'POST',
@@ -439,7 +628,7 @@ async function submitAddDomain(event) {
 
 // 查看域名详情
 function viewDomain(domain) {
-    window.location.href = `/api/domains/${encodeURIComponent(domain)}`;
+    window.location.href = `/analysis/original-target/${encodeURIComponent(domain)}`;
 }
 
 // 扫描域名
@@ -475,9 +664,18 @@ async function deleteDomain(domain) {
     }
     
     try {
-        // 这里需要添加删除API
-        showNotification(`删除功能开发中: ${domain}`, 'info');
-        // 暂时只是刷新列表
+        const response = await fetch(`/api/domains/${encodeURIComponent(domain)}`, {
+            method: 'DELETE'
+        });
+
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.success) {
+            throw new Error(data.error || '删除请求失败');
+        }
+
+        selectedDomains.delete(domain);
+        updateBatchActions();
+        showNotification(`删除成功: ${domain}`, 'success');
         loadDomains();
     } catch (error) {
         console.error('删除域名失败:', error);
@@ -548,29 +746,59 @@ function batchExport() {
 }
 
 // 批量删除
-function batchDelete() {
+async function batchDelete() {
     if (selectedDomains.size === 0) {
         showNotification('请先选择要删除的域名', 'warning');
         return;
     }
     
     if (confirm(`确定要删除 ${selectedDomains.size} 个域名及其所有相关数据吗？`)) {
-        showNotification(`批量删除 ${selectedDomains.size} 个域名（开发中）`, 'info');
-        selectedDomains.clear();
-        updateBatchActions();
-        loadDomains();
+        try {
+            const domains = Array.from(selectedDomains);
+            const response = await fetch('/api/domains/batch-delete', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ domains })
+            });
+
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok || !data.success) {
+                throw new Error(data.error || '批量删除请求失败');
+            }
+
+            const result = data.data || {};
+            const deletedCount = result.deleted_count || 0;
+            const notFoundCount = result.not_found_count || 0;
+
+            if (deletedCount > 0) {
+                const deletedSet = new Set(result.deleted || []);
+                selectedDomains.forEach((domain) => {
+                    if (deletedSet.has(domain)) {
+                        selectedDomains.delete(domain);
+                    }
+                });
+            }
+
+            updateBatchActions();
+            loadDomains();
+
+            if (notFoundCount > 0) {
+                showNotification(`已删除 ${deletedCount} 个，${notFoundCount} 个不存在`, 'warning');
+            } else {
+                showNotification(`批量删除成功：${deletedCount} 个域名`, 'success');
+            }
+        } catch (error) {
+            console.error('批量删除失败:', error);
+            showNotification('批量删除失败: ' + error.message, 'danger');
+        }
     }
 }
 
 // 关闭模态框
 function closeModal(modalId) {
     document.getElementById(modalId).style.display = 'none';
-}
-
-// 验证域名格式
-function isValidDomain(domain) {
-    const domainRegex = /^[a-zA-Z0-9][a-zA-Z0-9-]{0,61}[a-zA-Z0-9]\.[a-zA-Z]{2,}$/;
-    return domainRegex.test(domain) && domain.includes('.');
 }
 
 // 获取风险等级CSS类

@@ -2,6 +2,11 @@
 
 // 全局变量
 let riskChart = null;
+const dashboardState = {
+    stats: null,
+    recentDomains: [],
+    systemStatus: null
+};
 
 // 加载仪表板数据
 async function loadDashboardData() {
@@ -14,14 +19,13 @@ async function loadDashboardData() {
         const statsData = await statsResponse.json();
         
         if (statsData.success) {
+            dashboardState.stats = statsData.data;
             updateStatsCards(statsData.data);
+            renderActionInsights();
         }
         
         // 加载最近域名
         await loadRecentDomains();
-        
-        // 加载风险分布
-        await loadRiskDistribution();
         
     } catch (error) {
         console.error('加载仪表板数据失败:', error);
@@ -31,25 +35,27 @@ async function loadDashboardData() {
 
 // 更新统计卡片
 function updateStatsCards(stats) {
-    // 更新监控域名总数
     const totalDomains = stats.total_domains || 0;
-    document.getElementById('total-domains').textContent = totalDomains;
-    document.getElementById('domain-change').textContent = Math.floor(totalDomains * 0.1); // 模拟10%增长
-    
-    // 更新高风险域名
     const highRisk = stats.high_risk_domains || 0;
-    document.getElementById('high-risk-domains').textContent = highRisk;
-    document.getElementById('high-risk-change').textContent = Math.floor(highRisk * 0.05); // 模拟5%变化
-    
-    // 更新最近扫描
+    const mediumRisk = stats.medium_risk_domains || 0;
+    const lowRisk = stats.low_risk_domains || 0;
     const recentScans = stats.recent_scans || 0;
-    document.getElementById('recent-scans').textContent = recentScans;
-    document.getElementById('scan-time').textContent = '30分钟'; // 模拟时间
-    
-    // 更新威胁检测
     const threats = stats.threats_detected || 0;
-    document.getElementById('threats-detected').textContent = threats;
-    document.getElementById('threat-change').textContent = Math.floor(threats * 0.08); // 模拟8%拦截
+    const riskRate = totalDomains > 0 ? `${Math.round((highRisk / totalDomains) * 100)}%` : '0%';
+    const pendingReview = Math.max(0, highRisk - threats);
+
+    setText('total-domains', totalDomains);
+    setText('domain-change', Math.max(0, totalDomains - recentScans));
+    setText('medium-risk-inline', mediumRisk);
+    setText('low-risk-inline', lowRisk);
+
+    setText('high-risk-domains', highRisk);
+    setText('risk-rate', riskRate);
+    setText('threats-detected-inline', threats);
+    setText('pending-review-inline', pendingReview);
+
+    setText('recent-scans', recentScans);
+    setText('scan-time', '最近 30 秒已同步');
 }
 
 // 加载最近域名
@@ -60,7 +66,7 @@ async function loadRecentDomains() {
     try {
         tableBody.innerHTML = `
             <tr>
-                <td colspan="4" class="loading">
+                <td colspan="2" class="loading">
                     <div class="spinner"></div>
                     加载中...
                 </td>
@@ -72,37 +78,31 @@ async function loadRecentDomains() {
         const data = await response.json();
         
         if (data.success && data.data.length > 0) {
+            dashboardState.recentDomains = data.data;
             let html = '';
-            data.data.forEach(domain => {
-                const riskClass = getRiskClass(domain.risk_level);
-                const riskText = getRiskText(domain.risk_level);
-                
+            data.data.forEach(item => {
+                const target = item.original_target || '-';
+                const targetLink = `/analysis/original-target/${encodeURIComponent(target)}`;
                 html += `
                     <tr>
+                        <td><strong>${escapeHtml(target)}</strong></td>
                         <td>
-                            <div class="domain-info">
-                                <strong>${escapeHtml(domain.domain)}</strong>
-                                <br>
-                                <small>原目标: ${escapeHtml(domain.original_target)}</small>
-                            </div>
-                        </td>
-                        <td>${escapeHtml(domain.scan_time || '未知')}</td>
-                        <td>
-                            <span class="risk-badge ${riskClass}">${riskText}</span>
-                        </td>
-                        <td>
-                            <button class="btn btn-sm btn-secondary" onclick="viewDomainDetail('${escapeHtml(domain.domain)}')">
-                                <i class="fas fa-eye"></i> 查看
-                            </button>
+                            <a class="btn btn-sm btn-secondary" href="${targetLink}">
+                                <i class="fas fa-chart-line"></i> 查看分析
+                            </a>
                         </td>
                     </tr>
                 `;
             });
             tableBody.innerHTML = html;
+            setText('recent-scans', data.data.length);
+            setText('scan-time', '基于最近扫描目标');
+            renderActionInsights();
         } else {
+            dashboardState.recentDomains = [];
             tableBody.innerHTML = `
                 <tr>
-                    <td colspan="4" class="empty-state">
+                    <td colspan="2" class="empty-state">
                         <i class="fas fa-inbox"></i>
                         <p>暂无域名数据</p>
                         <button class="btn btn-primary" onclick="startNewScan()">
@@ -116,7 +116,7 @@ async function loadRecentDomains() {
         console.error('加载域名列表失败:', error);
         tableBody.innerHTML = `
             <tr>
-                <td colspan="4" class="empty-state">
+                <td colspan="2" class="empty-state">
                     <i class="fas fa-exclamation-triangle"></i>
                     <p>加载失败: ${error.message}</p>
                     <button class="btn btn-secondary" onclick="loadRecentDomains()">
@@ -227,6 +227,7 @@ async function checkSystemStatus() {
         
         if (data.success) {
             const status = data.data;
+            dashboardState.systemStatus = status;
             
             // 更新数据库状态
             const dbStatus = document.getElementById('db-status');
@@ -268,6 +269,7 @@ async function checkSystemStatus() {
                 storageStatus.className = 'status-value status-online';
             }
             
+            renderActionInsights();
             showNotification('系统状态检查完成', 'success');
         }
     } catch (error) {
@@ -299,12 +301,6 @@ async function startQuickScan(event) {
         return false;
     }
     
-    // 验证域名格式
-    if (!isValidDomain(domain)) {
-        showNotification('域名格式不正确，请输入类似 example.com 的格式', 'warning');
-        return false;
-    }
-    
     // 显示进度条
     const progressContainer = document.getElementById('scan-progress');
     const progressBar = document.getElementById('scan-progress-bar');
@@ -315,26 +311,28 @@ async function startQuickScan(event) {
     progressBar.style.width = '10%';
     
     try {
-        // 发送扫描请求
-        const response = await fetch('/api/scan/start', {
+        // 发送 WHOIS 富化请求（使用后端 /api/whois/enrich）
+        const response = await fetch('/api/whois/enrich', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
             },
-            body: JSON.stringify({ domain: domain })
+            // async background task preferred to avoid blocking UI
+            body: JSON.stringify({ domain: domain, sync: false })
         });
-        
-        if (!response.ok) throw new Error('扫描请求失败');
-        
+
+        if (!response.ok) throw new Error('WHOIS 请求失败');
+
         const data = await response.json();
-        
+
         if (data.success) {
-            // 模拟扫描进度
-            simulateScanProgress(progressBar, scanMessage, data.data.scan_id);
-            
-            showNotification(`扫描任务已启动: ${domain}`, 'success');
+            // API 返回 task_id（异步）或 whois（同步）
+            const taskId = data.task_id || (data.data && data.data.scan_id) || `whois-sync-${Date.now()}`;
+            simulateScanProgress(progressBar, scanMessage, taskId);
+
+            showNotification(`WHOIS 任务已提交: ${domain}`, 'success');
         } else {
-            throw new Error(data.error || '扫描启动失败');
+            throw new Error(data.error || 'WHOIS 启动失败');
         }
     } catch (error) {
         console.error('扫描启动失败:', error);
@@ -396,13 +394,11 @@ function simulateScanProgress(progressBar, scanMessage, scanId) {
 }
 
 // 查看域名详情
-function viewDomainDetail(domain) {
-    // 这里可以跳转到域名详情页面或打开模态框
-    console.log('查看域名详情:', domain);
-    showNotification(`正在加载域名详情: ${domain}`, 'info');
-    
-    // 模拟跳转到详情页面
-    window.location.href = `/domains/${encodeURIComponent(domain)}`;
+function viewDomainDetail(domain, originalTarget) {
+    const target = (originalTarget || domain || '').trim();
+    if (!target) return;
+    showNotification(`正在加载原始域名分析: ${target}`, 'info');
+    window.location.href = `/analysis/original-target/${encodeURIComponent(target)}`;
 }
 
 // 开始新扫描
@@ -420,6 +416,28 @@ function refreshDashboard() {
 // 显示高级选项
 function showAdvancedOptions() {
     showNotification('高级选项功能正在开发中', 'info');
+}
+
+function renderActionInsights() {
+    const list = document.getElementById('action-insights');
+    if (!list) return;
+
+    const stats = dashboardState.stats || {};
+    const recent = dashboardState.recentDomains || [];
+    const status = dashboardState.systemStatus || {};
+
+    const dbOk = !!status.database;
+    const vtOk = !!status.api_keys?.virustotal;
+    const recentTargetCount = recent.length;
+
+    const insights = [
+        recentTargetCount > 0 ? `最近扫描目标 ${recentTargetCount} 个，请进入对应原始域名分析页查看监控资产和风险分布。` : '当前无最近扫描记录，可先发起一次快速扫描。',
+        '首页不展示全局风险统计，风险指标已下沉到每个原始域名分析页。',
+        dbOk ? '数据库连接正常，可持续写入扫描结果。' : '数据库状态异常，建议先修复连接。',
+        vtOk ? 'VirusTotal API 可用，威胁关联验证已开启。' : 'VirusTotal API 未配置，威胁识别可能不完整。'
+    ];
+
+    list.innerHTML = insights.map(item => `<li class="insight-item">${escapeHtml(item)}</li>`).join('');
 }
 
 // 显示通知
@@ -463,16 +481,61 @@ function getRiskText(riskLevel) {
     }
 }
 
-// 辅助函数：验证域名格式
-function isValidDomain(domain) {
-    // 简单的域名验证
-    const domainRegex = /^[a-zA-Z0-9][a-zA-Z0-9-]{0,61}[a-zA-Z0-9]\.[a-zA-Z]{2,}$/;
-    return domainRegex.test(domain) && domain.includes('.');
-}
-
 // 辅助函数：HTML转义
 function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+}
+
+function setText(id, value) {
+    const element = document.getElementById(id);
+    if (element) {
+        element.textContent = String(value);
+    }
+}
+
+// 检查返回的数据是否为 JSON
+function isJSON(response) {
+    const contentType = response.headers.get('content-type');
+    return contentType && contentType.includes('application/json');
+}
+
+// 获取并显示特定查询的结果
+function fetchQueryResults(queryId) {
+    fetch(`/api/query_results/${queryId}`)
+        .then(response => {
+            if (!isJSON(response)) {
+                throw new Error('Invalid response format: Expected JSON');
+            }
+            return response.json();
+        })
+        .then(data => {
+            if (data.error) {
+                console.error(`Error fetching query results: ${data.error}`);
+                return;
+            }
+
+            // 显示原始域名
+            const originalDomainsList = document.getElementById('original-domains-list');
+            originalDomainsList.innerHTML = '';
+            data.original_domains.forEach(domain => {
+                const li = document.createElement('li');
+                li.textContent = domain;
+                originalDomainsList.appendChild(li);
+            });
+
+            // 显示查询结果
+            const resultsList = document.getElementById('query-results-list');
+            resultsList.innerHTML = '';
+            data.results.forEach(result => {
+                const li = document.createElement('li');
+                li.textContent = result;
+                resultsList.appendChild(li);
+            });
+        })
+        .catch(error => {
+            console.error('Error fetching query results:', error);
+            alert(`网络请求失败: ${error.message}`);
+        });
 }

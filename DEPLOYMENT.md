@@ -8,11 +8,10 @@
 2. [快速开始](#快速开始)
 3. [本地开发环境部署](#本地开发环境部署)
 4. [生产环境部署](#生产环境部署)
-5. [Docker部署](#docker部署)
-6. [云平台部署](#云平台部署)
-7. [配置说明](#配置说明)
-8. [维护和监控](#维护和监控)
-9. [故障排除](#故障排除)
+5. [云平台部署](#云平台部署)
+6. [配置说明](#配置说明)
+7. [维护和监控](#维护和监控)
+8. [故障排除](#故障排除)
 
 ## 系统要求
 
@@ -336,163 +335,16 @@ sudo nano /etc/logrotate.d/domainsec
 }
 ```
 
-## Docker部署
+## 容器化部署（已移除示例）
 
-### 使用Docker Compose一键部署
+原文档中的 Docker Compose 与 Dockerfile 示例已移除。若需使用容器化部署，请根据目标平台（Docker Compose、Kubernetes、云容器服务等）自行创建部署清单，并确保遵循组织安全与运行时规范。
 
-创建 `docker-compose.yml`:
+建议替代步骤：
+- 在生产环境使用系统服务（systemd + gunicorn + nginx）或容器平台（Kubernetes）部署服务
+- 为数据库和缓存使用托管或独立服务（例如 RDS、Cloud SQL、Managed Redis）而非内置容器
+- 将敏感配置通过环境变量或机密管理（例如 Vault、Kubernetes Secrets）提供给运行时
 
-```yaml
-version: '3.8'
-
-services:
-  postgres:
-    image: postgres:16
-    container_name: domainsec-postgres
-    environment:
-      POSTGRES_DB: domain_security
-      POSTGRES_USER: domainsec
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-changeme}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./init-scripts:/docker-entrypoint-initdb.d
-    ports:
-      - "5432:5432"
-    networks:
-      - domainsec-network
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U domainsec"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  redis:
-    image: redis:7-alpine
-    container_name: domainsec-redis
-    ports:
-      - "6379:6379"
-    networks:
-      - domainsec-network
-    restart: unless-stopped
-    command: redis-server --appendonly yes
-
-  web:
-    build: .
-    container_name: domainsec-web
-    environment:
-      DB_HOST: postgres
-      DB_PORT: 5432
-      DB_NAME: domain_security
-      DB_USER: domainsec
-      DB_PASSWORD: ${DB_PASSWORD:-changeme}
-      REDIS_URL: redis://redis:6379/0
-      FLASK_ENV: production
-      SECRET_KEY: ${SECRET_KEY:-change-this-secret-key}
-    volumes:
-      - ./static:/app/static
-      - ./monitoring_results:/app/monitoring_results
-      - ./domain_variants:/app/domain_variants
-    ports:
-      - "5000:5000"
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_started
-    networks:
-      - domainsec-network
-    restart: unless-stopped
-
-  nginx:
-    image: nginx:alpine
-    container_name: domainsec-nginx
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./static:/usr/share/nginx/html/static:ro
-      - ./ssl:/etc/nginx/ssl:ro
-    depends_on:
-      - web
-    networks:
-      - domainsec-network
-    restart: unless-stopped
-
-volumes:
-  postgres_data:
-    driver: local
-
-networks:
-  domainsec-network:
-    driver: bridge
-```
-
-### Dockerfile
-创建 `Dockerfile`:
-
-```dockerfile
-FROM python:3.10-slim
-
-WORKDIR /app
-
-# 安装系统依赖
-RUN apt-get update && apt-get install -y \
-    gcc \
-    g++ \
-    libpq-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-# 安装Go（用于构建DNS扫描器）
-RUN apt-get update && apt-get install -y \
-    golang \
-    && rm -rf /var/lib/apt/lists/*
-
-# 复制依赖文件
-COPY requirements.txt .
-
-# 安装Python依赖
-RUN pip install --no-cache-dir -r requirements.txt
-
-# 复制应用代码
-COPY . .
-
-# 编译Go组件
-RUN go build -o xdig xdig.go && \
-    go build -o domain_gen main.go
-
-# 创建非root用户
-RUN useradd -m -u 1000 domainsec && \
-    chown -R domainsec:domainsec /app
-
-USER domainsec
-
-# 暴露端口
-EXPOSE 5000
-
-# 启动命令
-CMD ["gunicorn", "-w", "4", "-b", "0.0.0.0:5000", "web_app:app"]
-```
-
-### 启动Docker服务
-```bash
-# 复制环境变量模板
-cp .env.example .env
-# 编辑.env文件，设置数据库密码等
-
-# 构建并启动服务
-docker-compose up -d
-
-# 查看日志
-docker-compose logs -f
-
-# 停止服务
-docker-compose down
-
-# 带数据卷停止
-docker-compose down -v
-```
+若你希望我为特定平台（如 Kubernetes 或 Docker Compose）生成安全的部署示例，请告诉我目标平台与约束，我可以为你创建相应部署清单。
 
 ## 云平台部署
 

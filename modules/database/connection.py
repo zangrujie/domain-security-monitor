@@ -3,12 +3,16 @@
 数据库连接管理 - 提供统一的数据库连接和会话管理
 """
 
+
+
 import os
 import logging
 from typing import Optional
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, Session, scoped_session
 from sqlalchemy.exc import SQLAlchemyError
+from dotenv import load_dotenv
+load_dotenv()
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -34,11 +38,19 @@ class DatabaseConnection:
     def _get_connection_string(self) -> str:
         """从环境变量获取连接字符串"""
         # 尝试从环境变量读取
+        # 环境变量可能来自 .env（Windows CRLF 会留下 '\r'），因此在读取后去除前后空白和回车
         db_user = os.getenv('DB_USER', 'postgres')
         db_password = os.getenv('DB_PASSWORD', 'password')
         db_host = os.getenv('DB_HOST', 'localhost')
         db_port = os.getenv('DB_PORT', '5432')
         db_name = os.getenv('DB_NAME', 'domain_security')
+
+        # strip whitespace and remove any stray carriage returns
+        db_user = db_user.strip() if isinstance(db_user, str) else db_user
+        db_password = db_password.strip() if isinstance(db_password, str) else db_password
+        db_host = str(db_host).replace('\r', '').strip()
+        db_port = str(db_port).replace('\r', '').strip()
+        db_name = str(db_name).replace('\r', '').strip()
         
         connection_string = f"postgresql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
         logger.info(f"使用数据库连接: {db_user}@{db_host}:{db_port}/{db_name}")
@@ -56,14 +68,26 @@ class DatabaseConnection:
             bool: 连接是否成功
         """
         try:
+            # 连接池参数可通过 .env 配置，使用安全默认值
+            pool_size = int(os.getenv('DB_POOL_SIZE', '10'))
+            max_overflow = int(os.getenv('DB_MAX_OVERFLOW', '20'))
+            pool_recycle = int(os.getenv('DB_POOL_RECYCLE', '3600'))
+            pool_timeout = int(os.getenv('DB_POOL_TIMEOUT', '15'))
+
             # 添加编码参数解决中文环境下的编码问题
             self.engine = create_engine(
                 self.connection_string,
                 echo=echo,
                 connect_args={
-                    'client_encoding': 'utf8'
+                    'client_encoding': 'utf8',
+                    'connect_timeout': int(os.getenv('DB_CONNECT_TIMEOUT', '10'))
                 },
-                pool_pre_ping=True
+                pool_size=pool_size,
+                max_overflow=max_overflow,
+                pool_recycle=pool_recycle,
+                pool_timeout=pool_timeout,
+                pool_pre_ping=True,
+                pool_use_lifo=True
             )
             
             # 创建会话工厂
@@ -108,7 +132,7 @@ class DatabaseConnection:
                 self.connect()
             
             with self.engine.connect() as conn:
-                conn.execute("SELECT 1")
+                conn.execute(text("SELECT 1"))
             logger.info("数据库连接测试成功")
             return True
             
@@ -196,12 +220,12 @@ class DatabaseSession:
         try:
             if exc_type is not None:
                 self.session.rollback()
-                logger.error(f"数据库操作异常: {exc_val}")
+                logger.error(f"数据库操作异常: {repr(exc_val)}")
             else:
                 self.session.commit()
         except SQLAlchemyError as e:
             self.session.rollback()
-            logger.error(f"数据库会话提交失败: {e}")
+            logger.error(f"数据库会话提交失败: {repr(e)}")
             raise
         finally:
             self.session.close()

@@ -307,6 +307,12 @@
                     <input type="text" class="form-control" id="report-name" 
                            placeholder="例如: 2026年2月域名风险评估报告" required>
                 </div>
+
+                <div class="form-group">
+                    <label class="form-label">原始域名（可选）</label>
+                    <input type="text" class="form-control" id="report-original-target"
+                           placeholder="例如: gmw.cn（留空则生成全局报告）">
+                </div>
                 
                 <div class="form-row">
                     <div class="form-group col-md-6">
@@ -380,90 +386,44 @@
 
 {% block extra_js %}
 <script>
-// 页面加载完成后初始化
+let allReports = [];
+let reportDetailsCache = {};
+let riskChartInstance = null;
+let currentReportId = null;
+
 document.addEventListener('DOMContentLoaded', function() {
     loadReports();
-    initRiskChart();
 });
 
-// 加载报告列表
 async function loadReports() {
     const tableBody = document.getElementById('reports-table');
     if (!tableBody) return;
-    
+    tableBody.innerHTML = `
+        <tr>
+            <td colspan="7" class="loading">
+                <div class="spinner"></div>
+                加载中...
+            </td>
+        </tr>
+    `;
+
     try {
-        // 模拟数据
-        const reports = [
-            {
-                id: 'REPORT-20260209-001',
-                name: 'deepseek.com 风险评估报告',
-                type: 'risk',
-                time: '2026-02-09 20:00:00',
-                scope: 'deepseek.com',
-                size: '2.5MB'
-            },
-            {
-                id: 'REPORT-20260208-001',
-                name: '2026年2月第1周报告',
-                type: 'weekly',
-                time: '2026-02-08 18:30:00',
-                scope: '全部域名',
-                size: '1.8MB'
-            },
-            {
-                id: 'REPORT-20260201-001',
-                name: '2026年2月月度报告',
-                type: 'monthly',
-                time: '2026-02-01 09:00:00',
-                scope: '全部域名',
-                size: '3.2MB'
-            },
-            {
-                id: 'REPORT-20260125-001',
-                name: 'example.com 安全分析',
-                type: 'custom',
-                time: '2026-01-25 14:20:00',
-                scope: 'example.com',
-                size: '1.1MB'
-            }
-        ];
-        
-        let html = '';
-        reports.forEach(report => {
-            const typeClass = getReportTypeClass(report.type);
-            const typeText = getReportTypeText(report.type);
-            
-            html += `
-                <tr>
-                    <td>
-                        <code>${report.id}</code>
-                    </td>
-                    <td>${escapeHtml(report.name)}</td>
-                    <td>
-                        <span class="report-type ${typeClass}">${typeText}</span>
-                    </td>
-                    <td>${escapeHtml(report.time)}</td>
-                    <td>${escapeHtml(report.scope)}</td>
-                    <td>${report.size}</td>
-                    <td>
-                        <div class="action-buttons">
-                            <button class="btn btn-sm btn-secondary" onclick="viewReport('${report.id}')">
-                                <i class="fas fa-eye"></i>
-                            </button>
-                            <button class="btn btn-sm btn-secondary" onclick="downloadReport('${report.id}')">
-                                <i class="fas fa-download"></i>
-                            </button>
-                            <button class="btn btn-sm btn-danger" onclick="deleteReport('${report.id}')">
-                                <i class="fas fa-trash"></i>
-                            </button>
-                        </div>
-                    </td>
-                </tr>
-            `;
-        });
-        
-        tableBody.innerHTML = html;
-        
+        const response = await fetch('/api/reports');
+        if (!response.ok) throw new Error('报告列表请求失败');
+
+        const payload = await response.json();
+        if (!payload.success) throw new Error(payload.error || '报告列表返回失败');
+
+        const data = payload.data || {};
+        allReports = data.reports || [];
+        updateReportStats(data.stats || {});
+        renderReportsTable(getFilteredReports());
+
+        if (allReports.length > 0) {
+            await viewReport(allReports[0].id, true);
+        } else {
+            renderEmptyReportPreview();
+        }
     } catch (error) {
         console.error('加载报告列表失败:', error);
         tableBody.innerHTML = `
@@ -480,135 +440,433 @@ async function loadReports() {
     }
 }
 
-// 初始化风险图表
-function initRiskChart() {
-    const ctx = document.getElementById('riskChart');
-    if (!ctx) return;
-    
-    const chart = new Chart(ctx, {
+function updateReportStats(stats) {
+    document.getElementById('total-reports').textContent = stats.total_reports || 0;
+    document.getElementById('weekly-reports').textContent = stats.weekly_reports || 0;
+    document.getElementById('monthly-reports').textContent = stats.monthly_reports || 0;
+    document.getElementById('risk-reports').textContent = stats.risk_reports || 0;
+}
+
+function getFilteredReports() {
+    const typeFilter = document.getElementById('report-type-filter').value;
+    const timeFilter = document.getElementById('report-time-filter').value;
+    const now = new Date();
+
+    return allReports.filter(report => {
+        if (typeFilter && report.type !== typeFilter) return false;
+        if (!timeFilter) return true;
+        const createdAt = new Date(report.time);
+        if (Number.isNaN(createdAt.getTime())) return false;
+
+        if (timeFilter === 'today') {
+            return createdAt.toDateString() === now.toDateString();
+        }
+        if (timeFilter === 'week') {
+            return (now - createdAt) <= 7 * 24 * 60 * 60 * 1000;
+        }
+        if (timeFilter === 'month') {
+            return createdAt.getMonth() === now.getMonth() && createdAt.getFullYear() === now.getFullYear();
+        }
+        if (timeFilter === 'quarter') {
+            const q1 = Math.floor(createdAt.getMonth() / 3);
+            const q2 = Math.floor(now.getMonth() / 3);
+            return q1 === q2 && createdAt.getFullYear() === now.getFullYear();
+        }
+        return true;
+    });
+}
+
+function renderReportsTable(reports) {
+    const tableBody = document.getElementById('reports-table');
+    if (!tableBody) return;
+
+    if (reports.length === 0) {
+        tableBody.innerHTML = `
+            <tr>
+                <td colspan="7" class="empty-state">
+                    <i class="fas fa-inbox"></i>
+                    <p>暂无符合条件的报告</p>
+                </td>
+            </tr>
+        `;
+        return;
+    }
+
+    let html = '';
+    reports.forEach(report => {
+        const typeClass = getReportTypeClass(report.type);
+        const typeText = getReportTypeText(report.type);
+        html += `
+            <tr>
+                <td><code>${escapeHtmlSafe(report.id)}</code></td>
+                <td>${escapeHtmlSafe(report.name)}</td>
+                <td><span class="report-type ${typeClass}">${typeText}</span></td>
+                <td>${escapeHtmlSafe(formatDateTime(report.time))}</td>
+                <td>${escapeHtmlSafe(report.scope || '全部域名')}</td>
+                <td>${escapeHtmlSafe(report.size || '0KB')}</td>
+                <td>
+                    <div class="action-buttons">
+                        <button class="btn btn-sm btn-secondary" onclick="viewReport('${escapeHtmlSafe(report.id)}')">
+                            <i class="fas fa-eye"></i>
+                        </button>
+                        <button class="btn btn-sm btn-secondary" onclick="downloadReport('${escapeHtmlSafe(report.id)}')">
+                            <i class="fas fa-download"></i>
+                        </button>
+                        <button class="btn btn-sm btn-danger" onclick="deleteReport('${escapeHtmlSafe(report.id)}')">
+                            <i class="fas fa-trash"></i>
+                        </button>
+                    </div>
+                </td>
+            </tr>
+        `;
+    });
+    tableBody.innerHTML = html;
+}
+
+function renderRiskChart(distribution) {
+    const canvas = document.getElementById('riskChart');
+    if (!canvas) return;
+    const container = canvas.parentElement;
+    const total = Number(distribution.critical || 0)
+        + Number(distribution.high || 0)
+        + Number(distribution.medium || 0)
+        + Number(distribution.low || 0)
+        + Number(distribution.unknown || 0);
+
+    if (container) {
+        container.style.height = '280px';
+        container.style.maxWidth = '720px';
+    }
+
+    const data = [
+        distribution.critical || 0,
+        distribution.high || 0,
+        distribution.medium || 0,
+        distribution.low || 0,
+        distribution.unknown || 0
+    ];
+
+    if (riskChartInstance) {
+        riskChartInstance.destroy();
+    }
+
+    if (total === 0) {
+        if (container) {
+            container.innerHTML = `
+                <div class="empty-state" style="height:100%;display:flex;align-items:center;justify-content:center;">
+                    <p>暂无风险分布数据</p>
+                </div>
+            `;
+        }
+        return;
+    }
+
+    if (container) {
+        container.innerHTML = '<canvas id="riskChart"></canvas>';
+    }
+    const chartCanvas = document.getElementById('riskChart');
+    if (!chartCanvas) return;
+
+    riskChartInstance = new Chart(chartCanvas, {
         type: 'doughnut',
         data: {
-            labels: ['严重风险', '高风险', '中风险', '低风险', '无风险'],
+            labels: ['严重风险', '高风险', '中风险', '低风险', '未知'],
             datasets: [{
-                data: [5000, 85558, 15000, 2500, 20],
-                backgroundColor: [
-                    '#dc3545',
-                    '#ff6b6b',
-                    '#fd7e14',
-                    '#ffc107',
-                    '#28a745'
-                ],
+                data,
+                backgroundColor: ['#dc3545', '#ff6b6b', '#fd7e14', '#ffc107', '#6c757d'],
                 borderWidth: 1
             }]
         },
         options: {
             responsive: true,
+            maintainAspectRatio: false,
             plugins: {
-                legend: {
-                    position: 'right',
-                },
-                title: {
-                    display: true,
-                    text: '风险分布图'
-                }
+                legend: { position: 'right' },
+                title: { display: true, text: '风险分布图' }
             }
         }
     });
 }
 
-// 过滤报告
-function filterReports() {
-    const typeFilter = document.getElementById('report-type-filter').value;
-    const timeFilter = document.getElementById('report-time-filter').value;
-    
-    // 在实际应用中，这里应该重新加载筛选后的数据
-    showNotification('筛选功能开发中', 'info');
+function renderEmptyReportPreview() {
+    const preview = document.getElementById('report-preview');
+    if (!preview) return;
+    preview.innerHTML = `
+        <div class="empty-state">
+            <i class="fas fa-file-alt"></i>
+            <p>暂无报告，请先生成报告</p>
+        </div>
+    `;
 }
 
-// 清空筛选
+function renderReportPreview(report) {
+    const preview = document.getElementById('report-preview');
+    if (!preview) return;
+    const summary = report.summary || {};
+    const examples = report.high_risk_examples || [];
+    const findings = report.findings || [];
+    const recommendations = report.recommendations || [];
+    const registrationDist = report.registration_time_distribution || {};
+    const registrarDist = report.registrar_distribution || {};
+    const whoisInsights = report.whois_insights || [];
+    const registrationRows = Object.entries(registrationDist)
+        .sort((a, b) => String(a[0]).localeCompare(String(b[0])))
+        .map(([k, v]) => `<tr><td>${escapeHtmlSafe(k)}</td><td>${escapeHtmlSafe(v)}</td></tr>`)
+        .join('');
+    const registrarRows = Object.entries(registrarDist)
+        .sort((a, b) => Number(b[1]) - Number(a[1]))
+        .slice(0, 10)
+        .map(([k, v]) => `<tr><td>${escapeHtmlSafe(k)}</td><td>${escapeHtmlSafe(v)}</td></tr>`)
+        .join('');
+
+    preview.innerHTML = `
+        <div class="report-header">
+            <h2>${escapeHtmlSafe(report.name || '域名安全监控报告')}</h2>
+            <div class="report-meta">
+                <div class="meta-item"><span class="meta-label">生成时间:</span><span class="meta-value">${escapeHtmlSafe(formatDateTime(report.created_at))}</span></div>
+                <div class="meta-item"><span class="meta-label">报告ID:</span><span class="meta-value">${escapeHtmlSafe(report.id)}</span></div>
+                <div class="meta-item"><span class="meta-label">类型:</span><span class="meta-value">${escapeHtmlSafe(getReportTypeText(report.type))}</span></div>
+                <div class="meta-item"><span class="meta-label">范围:</span><span class="meta-value">${escapeHtmlSafe(report.scope || '全部域名')}</span></div>
+            </div>
+        </div>
+        <div class="report-section">
+            <h3><i class="fas fa-chart-pie"></i> 执行摘要</h3>
+            <div class="summary-stats">
+                <div class="summary-item"><div class="summary-value">${summary.monitored_targets || 0}</div><div class="summary-label">监控域名</div></div>
+                <div class="summary-item"><div class="summary-value">${summary.detected_variants || 0}</div><div class="summary-label">检测变体</div></div>
+                <div class="summary-item"><div class="summary-value">${summary.high_risk_domains || 0}</div><div class="summary-label">高风险域名</div></div>
+                <div class="summary-item"><div class="summary-value">${summary.risk_coverage || 0}%</div><div class="summary-label">风险覆盖率</div></div>
+            </div>
+            <div class="summary-text">
+                <p>本报告聚合了 <strong>${summary.monitored_targets || 0}</strong> 个监控对象，识别出 <strong>${summary.high_risk_domains || 0}</strong> 个高风险样本，建议优先处理评分最高的可解析域名。</p>
+            </div>
+        </div>
+        <div class="report-section">
+            <h3><i class="fas fa-chart-pie"></i> 风险分布</h3>
+            <div class="risk-chart">
+                <canvas id="riskChart"></canvas>
+            </div>
+        </div>
+        <div class="report-section">
+            <h3><i class="fas fa-calendar-alt"></i> 注册时间分布</h3>
+            <div class="table-container">
+                <table>
+                    <thead><tr><th>月份</th><th>域名数量</th></tr></thead>
+                    <tbody>
+                        ${registrationRows || '<tr><td colspan="2">暂无注册时间分布数据</td></tr>'}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        <div class="report-section">
+            <h3><i class="fas fa-building"></i> 注册商分布（TOP10）</h3>
+            <div class="table-container">
+                <table>
+                    <thead><tr><th>注册商</th><th>域名数量</th></tr></thead>
+                    <tbody>
+                        ${registrarRows || '<tr><td colspan="2">暂无注册商分布数据</td></tr>'}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        <div class="report-section">
+            <h3><i class="fas fa-lightbulb"></i> WHOIS分布解读</h3>
+            <div class="risk-analysis">
+                <ul>
+                    ${(whoisInsights.length ? whoisInsights : ['暂无可解读的WHOIS分布信息']).map(i => `<li><i class="fas fa-info-circle text-info"></i> ${escapeHtmlSafe(i)}</li>`).join('')}
+                </ul>
+            </div>
+        </div>
+        <div class="report-section">
+            <h3><i class="fas fa-exclamation-triangle"></i> 主要发现</h3>
+            <div class="risk-analysis">
+                <ul>
+                    ${findings.map(f => `<li><i class="fas fa-info-circle text-info"></i> ${escapeHtmlSafe(f)}</li>`).join('')}
+                </ul>
+            </div>
+        </div>
+        <div class="report-section">
+            <h3><i class="fas fa-list"></i> 高风险域名示例</h3>
+            <div class="high-risk-list">
+                <table>
+                    <thead>
+                        <tr><th>域名</th><th>原目标</th><th>风险得分</th><th>风险等级</th><th>检测模块</th></tr>
+                    </thead>
+                    <tbody>
+                        ${examples.length > 0 ? examples.map(item => `
+                            <tr>
+                                <td><code>${escapeHtmlSafe(item.domain)}</code></td>
+                                <td>${escapeHtmlSafe(item.original_target || '-')}</td>
+                                <td><span class="risk-score high">${Number(item.risk_score || 0).toFixed(1)}</span></td>
+                                <td>${escapeHtmlSafe(item.risk_level || 'unknown')}</td>
+                                <td>${escapeHtmlSafe(item.module || '综合评估')}</td>
+                            </tr>
+                        `).join('') : '<tr><td colspan="5">暂无高风险样本</td></tr>'}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        <div class="report-section">
+            <h3><i class="fas fa-lightbulb"></i> 建议措施</h3>
+            <div class="recommendations">
+                ${recommendations.map(r => `<div class="recommendation general"><ul><li>${escapeHtmlSafe(r)}</li></ul></div>`).join('')}
+            </div>
+        </div>
+    `;
+
+    renderRiskChart(report.risk_distribution || {});
+}
+
+function filterReports() {
+    renderReportsTable(getFilteredReports());
+}
+
 function clearReportFilters() {
     document.getElementById('report-type-filter').value = '';
     document.getElementById('report-time-filter').value = '';
+    renderReportsTable(getFilteredReports());
     showNotification('筛选条件已清空', 'info');
 }
 
-// 生成报告
 function generateReport() {
     document.getElementById('generate-report-modal').style.display = 'block';
 }
 
-// 提交生成报告
 async function submitGenerateReport(event) {
     event.preventDefault();
-    
     const reportName = document.getElementById('report-name').value.trim();
-    
     if (!reportName) {
         showNotification('请输入报告名称', 'warning');
         return false;
     }
-    
+
+    const reportType = document.getElementById('report-type').value;
+    const startDate = document.getElementById('report-start-date').value;
+    const endDate = document.getElementById('report-end-date').value;
+    const originalTarget = (document.getElementById('report-original-target').value || '').trim().toLowerCase();
+    const modules = Array.from(document.querySelectorAll('input[name="report-module"]:checked')).map(el => el.value);
+    const format = document.querySelector('input[name="report-format"]:checked')?.value || 'html';
+
     try {
-        // 模拟API调用
-        setTimeout(() => {
-            showNotification(`报告"${reportName}"生成中...`, 'info');
-            
-            setTimeout(() => {
-                showNotification(`报告"${reportName}"已生成`, 'success');
-                closeModal('generate-report-modal');
-                loadReports();
-            }, 2000);
-        }, 500);
-        
+        const response = await fetch('/api/reports/generate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                name: reportName,
+                type: reportType,
+                start_date: startDate,
+                end_date: endDate,
+                original_target: originalTarget,
+                modules,
+                format
+            })
+        });
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+            throw new Error(data.error || '报告生成失败');
+        }
+        showNotification(`报告"${reportName}"已生成`, 'success');
+        closeModal('generate-report-modal');
+        document.getElementById('generate-report-form').reset();
+        await loadReports();
+        await viewReport(data.data.id, true);
     } catch (error) {
         console.error('生成报告失败:', error);
         showNotification('生成报告失败: ' + error.message, 'danger');
     }
-    
     return false;
 }
 
-// 查看报告
-function viewReport(reportId) {
-    showNotification(`查看报告: ${reportId}`, 'info');
-    // 实际应用中这里应该加载报告详情
-}
-
-// 下载报告
-function downloadReport(reportId) {
-    showNotification(`下载报告: ${reportId}（开发中）`, 'info');
-}
-
-// 删除报告
-function deleteReport(reportId) {
-    if (confirm(`确定要删除报告 ${reportId} 吗？`)) {
-        showNotification(`删除报告: ${reportId}（开发中）`, 'info');
+async function viewReport(reportId, silent = false) {
+    try {
+        if (!reportDetailsCache[reportId]) {
+            const response = await fetch(`/api/reports/${encodeURIComponent(reportId)}`);
+            const data = await response.json();
+            if (!response.ok || !data.success) {
+                throw new Error(data.error || '获取报告详情失败');
+            }
+            reportDetailsCache[reportId] = data.data;
+        }
+        renderReportPreview(reportDetailsCache[reportId]);
+        currentReportId = reportId;
+        if (!silent) showNotification(`已加载报告: ${reportId}`, 'info');
+    } catch (error) {
+        console.error('查看报告失败:', error);
+        showNotification('查看报告失败: ' + error.message, 'danger');
     }
 }
 
-// 导出全部报告
-function exportAllReports() {
-    showNotification('导出全部报告（开发中）', 'info');
+function downloadReport(reportId) {
+    const targetId = reportId || currentReportId;
+    if (!targetId) {
+        showNotification('请先选择一份报告再下载', 'warning');
+        return;
+    }
+    const url = `/api/reports/${encodeURIComponent(targetId)}/download?format=json`;
+    window.open(url, '_blank');
+    showNotification(`已开始下载报告: ${targetId}`, 'success');
 }
 
-// 刷新报告列表
+async function deleteReport(reportId) {
+    if (!confirm(`确定要删除报告 ${reportId} 吗？`)) return;
+    try {
+        const response = await fetch(`/api/reports/${encodeURIComponent(reportId)}`, { method: 'DELETE' });
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+            throw new Error(data.error || '删除报告失败');
+        }
+        delete reportDetailsCache[reportId];
+        showNotification(`报告已删除: ${reportId}`, 'success');
+        await loadReports();
+    } catch (error) {
+        console.error('删除报告失败:', error);
+        showNotification('删除报告失败: ' + error.message, 'danger');
+    }
+}
+
+function exportAllReports() {
+    window.open('/api/reports/export-all', '_blank');
+    showNotification('已开始导出全部报告（ZIP）', 'success');
+}
+
 function refreshReports() {
     loadReports();
     showNotification('报告列表已刷新', 'info');
 }
 
-// 打印报告
 function printReport() {
     window.print();
-    showNotification('打印报告', 'info');
 }
 
-// 分享报告
-function shareReport() {
-    showNotification('分享报告功能（开发中）', 'info');
+async function shareReport(reportId) {
+    const targetId = reportId || currentReportId;
+    if (!targetId) {
+        showNotification('请先选择一份报告再分享', 'warning');
+        return;
+    }
+
+    try {
+        const response = await fetch(`/api/reports/${encodeURIComponent(targetId)}/share`, {
+            method: 'POST'
+        });
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+            throw new Error(data.error || '生成分享链接失败');
+        }
+
+        const shareUrl = data.data?.share_url || '';
+        const absoluteUrl = shareUrl.startsWith('http')
+            ? shareUrl
+            : `${window.location.origin}${shareUrl}`;
+
+        await navigator.clipboard.writeText(absoluteUrl);
+        showNotification(`分享链接已复制: ${targetId}`, 'success');
+    } catch (error) {
+        console.error('分享报告失败:', error);
+        showNotification('分享报告失败: ' + error.message, 'danger');
+    }
 }
 
-// 关闭模态框
 function closeModal(modalId) {
     document.getElementById(modalId).style.display = 'none';
 }
@@ -633,6 +891,18 @@ function getReportTypeText(type) {
         case 'custom': return '自定义';
         default: return '其他';
     }
+}
+
+function formatDateTime(value) {
+    if (!value) return '';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return value;
+    return date.toLocaleString('zh-CN', { hour12: false });
+}
+
+function escapeHtmlSafe(text) {
+    const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+    return String(text == null ? '' : text).replace(/[&<>"']/g, m => map[m]);
 }
 </script>
 {% endblock %}

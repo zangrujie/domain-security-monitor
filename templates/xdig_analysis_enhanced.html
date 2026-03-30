@@ -28,8 +28,8 @@
         <div class="form-group">
             <label for="target-domain">目标域名</label>
             <input type="text" class="form-control" id="target-domain" 
-                   placeholder="输入原始域名，例如：deepseek.com">
-            <small class="form-text text-muted">请输入您要分析的原始域名</small>
+                   placeholder="输入原始域名，例如：deepseek.com 或 https://deepseek.com/login">
+            <small class="form-text text-muted">支持 URL、Unicode、带端口/路径/账号信息等输入形式</small>
         </div>
         <div class="form-group">
             <label for="threshold">相似度阈值</label>
@@ -380,12 +380,6 @@ async function startAnalysis() {
     
     if (!domain) {
         showNotification('请输入要分析的域名', 'warning');
-        return;
-    }
-    
-    // 验证域名格式
-    if (!domain.includes('.')) {
-        showNotification('域名格式不正确，请包含顶级域名', 'warning');
         return;
     }
     

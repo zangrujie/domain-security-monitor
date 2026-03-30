@@ -5,6 +5,10 @@
 
 import psycopg2
 import sys
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 def check_database():
     """检查数据库状态"""
@@ -16,38 +20,44 @@ def check_database():
     # 首先检查PostgreSQL服务是否可用
     try:
         # 连接到默认的postgres数据库
+        db_host = os.getenv('DB_HOST', 'localhost')
+        db_port = int(os.getenv('DB_PORT', '5432'))
+        db_user = os.getenv('DB_USER', 'postgres')
+        db_password = os.getenv('DB_PASSWORD', 'password')
+        db_name = os.getenv('DB_NAME', 'domain_security')
+
         conn = psycopg2.connect(
-            host='localhost',
-            port=5432,
-            user='postgres',
-            password='123',
+            host=db_host,
+            port=db_port,
+            user=db_user,
+            password=db_password,
             dbname='postgres'
         )
         print("✅ PostgreSQL服务运行正常")
         
         # 检查domain_security数据库是否存在
         cursor = conn.cursor()
-        cursor.execute("SELECT datname FROM pg_database WHERE datname = 'domain_security'")
+        cursor.execute("SELECT datname FROM pg_database WHERE datname = %s", (db_name,))
         result = cursor.fetchone()
         
         if result:
-            print("✅ domain_security数据库存在")
+            print(f"✅ {db_name}数据库存在")
             
             # 连接到domain_security数据库
             try:
                 conn2 = psycopg2.connect(
-                    host='localhost',
-                    port=5432,
-                    user='postgres',
-                    password='123',
-                    dbname='domain_security'
+                    host=db_host,
+                    port=db_port,
+                    user=db_user,
+                    password=db_password,
+                    dbname=db_name
                 )
                 cursor2 = conn2.cursor()
                 
                 # 检查表数量
                 cursor2.execute("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public'")
                 table_count = cursor2.fetchone()[0]
-                print(f"📊 domain_security数据库中有 {table_count} 张表")
+                print(f"📊 {db_name}数据库中有 {table_count} 张表")
                 
                 # 列出所有表
                 cursor2.execute("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name")
@@ -65,11 +75,11 @@ def check_database():
                 conn2.close()
                 
             except Exception as e:
-                print(f"❌ 连接到domain_security数据库失败: {e}")
+                print(f"❌ 连接到{db_name}数据库失败: {e}")
                 print("  可能数据库存在但表结构未初始化")
                 
         else:
-            print("❌ domain_security数据库不存在")
+            print(f"❌ {db_name}数据库不存在")
             print("  需要运行 init_database.py 来创建数据库和表")
             
         cursor.close()

@@ -189,21 +189,10 @@ function exportData(data, filename, type = 'application/json') {
     }, 100);
 }
 
-// 验证域名格式
+// 验证输入内容
 function isValidDomain(domain) {
     if (!domain || typeof domain !== 'string') return false;
-    
-    // 移除前后空格
-    domain = domain.trim();
-    
-    // 简单验证：至少包含一个点，并且点不在开头或结尾
-    if (domain.length < 4 || domain.length > 253) return false;
-    if (domain.startsWith('.') || domain.endsWith('.')) return false;
-    if (!domain.includes('.')) return false;
-    
-    // 更严格的验证（可选）
-    const domainRegex = /^[a-zA-Z0-9][a-zA-Z0-9-]{0,61}[a-zA-Z0-9](\.[a-zA-Z]{2,})+$/;
-    return domainRegex.test(domain);
+    return domain.trim().length > 0;
 }
 
 // 生成随机ID

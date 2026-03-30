@@ -34,7 +34,7 @@ A comprehensive domain security monitoring system designed to detect and analyze
 ## 📋 Prerequisites
 
 - **Python 3.8+** with pip
-- **PostgreSQL 12+** (or Docker)
+- **PostgreSQL 12+**
 - **Go 1.19+** (for building DNS scanner)
 - **Npcap** (Windows) / **libpcap** (Linux) for raw socket support
 - **Git** for version control
@@ -77,12 +77,7 @@ go build -o domain_gen.exe main.go
 python web_app.py
 ```
 
-### Docker Deployment (Coming Soon)
-
-```bash
-# Docker deployment will be available in future releases
-docker-compose up -d
-```
+<!-- Docker deployment examples removed. Use environment-specific deployment instructions in DEPLOYMENT.md. -->
 
 ## 📖 Usage
 
@@ -284,7 +279,7 @@ This project was developed for the open-source security competition with the fol
 1. **Machine Learning Integration**: Predictive models for emerging threats
 2. **Real-time Monitoring**: Continuous domain monitoring with alerts
 3. **Collaborative Features**: Community threat intelligence sharing
-4. **Cloud Deployment**: Kubernetes/Docker deployment packages
+4. **Cloud Deployment**: Kubernetes deployment packages
 
 ---
 

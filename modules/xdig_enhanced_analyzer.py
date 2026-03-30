@@ -20,6 +20,7 @@ import math
 
 # 添加项目根目录到路径
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from modules.domain_input import DomainInputError, normalize_domain_input
 
 # 导入现有模块
 try:
@@ -63,8 +64,11 @@ class XdigEnhancedAnalyzer:
         try:
             print(f"开始生成域名变体: {original_domain}")
             
-            # 清理域名
-            original_domain = original_domain.strip().lower()
+            # 标准化域名输入（支持 URL/Unicode/带端口等形式）
+            try:
+                original_domain = normalize_domain_input(original_domain)
+            except DomainInputError as e:
+                return {"success": False, "error": f"域名输入无效: {e}"}
             
             # 检查是否已有变体目录
             safe_name = self._sanitize_filename(original_domain)
@@ -82,9 +86,26 @@ class XdigEnhancedAnalyzer:
             # 使用Go程序生成变体
             print(f"调用Go程序生成变体: {original_domain}")
             
-            # 方法1: 使用go run main.go
-            cmd = ["go", "run", "main.go", "-domain", original_domain, "-threshold", str(threshold)]
-            
+            # 方法1: 使用 go 生成器 — 尝试查找 main.go 的合理路径并回退到 `go run .`
+            cmd = None
+            candidates = [
+                self.base_dir / "main.go",
+                self.base_dir / "MySecurityProject" / "main.go",
+                self.base_dir.parent / "main.go",
+            ]
+            for p in candidates:
+                if p.exists():
+                    cmd = ["go", "run", str(p), "-domain", original_domain, "-threshold", str(threshold)]
+                    break
+
+            # 如果当前目录为 Go module，优先使用 `go run .`
+            if cmd is None and (self.base_dir / "go.mod").exists():
+                cmd = ["go", "run", ".", "-domain", original_domain, "-threshold", str(threshold)]
+
+            # 兜底：尝试旧的 main.go 路径（可能失败）
+            if cmd is None:
+                cmd = ["go", "run", "main.go", "-domain", original_domain, "-threshold", str(threshold)]
+
             result = subprocess.run(
                 cmd,
                 capture_output=True,
@@ -145,40 +166,119 @@ class XdigEnhancedAnalyzer:
             
             with open(punycode_file, 'r', encoding='utf-8', errors='ignore') as f:
                 punycode_domains = [line.strip() for line in f if line.strip()]
-            
+            variants_meta: Dict[str, Dict[str, Any]] = {
+                domain: {"domain": domain, "source_type": "unknown", "similarity": None}
+                for domain in punycode_domains
+            }
+
+            # 读取所有变体（主要用于真实相似度）
+            all_variants_file = domain_dir / "all_variants.txt"
+            all_variants = []
+            if all_variants_file.exists():
+                with open(all_variants_file, 'r', encoding='utf-8', errors='ignore') as f:
+                    for raw in f:
+                        line = raw.strip()
+                        if not line:
+                            continue
+                        lower_line = line.lower()
+                        if lower_line.startswith("sim\t") or lower_line.startswith("type\t"):
+                            continue
+                        parts = line.split('\t')
+                        sim = None
+                        domain = None
+
+                        # 兼容格式:
+                        # 1) Sim\tDomain\tPunycode
+                        # 2) [NORMAL]\tSimilarity\tUnicode_Domain\tPunycode_Domain
+                        if len(parts) >= 3:
+                            try:
+                                sim = float(parts[0])
+                                domain = parts[1]
+                            except Exception:
+                                if len(parts) >= 4:
+                                    try:
+                                        sim = float(parts[1])
+                                    except Exception:
+                                        sim = None
+                                    domain = parts[2]
+
+                        if not domain:
+                            continue
+                        domain = domain.strip()
+                        if not domain:
+                            continue
+                        all_variants.append(domain)
+                        item = variants_meta.setdefault(
+                            domain, {"domain": domain, "source_type": "unknown", "similarity": None}
+                        )
+                        item["source_type"] = "visual"
+                        if sim is not None:
+                            item["similarity"] = max(0.0, min(1.0, float(sim)))
+
+            # 读取键盘变体（覆盖来源类型）
+            keyboard_file = domain_dir / "keyboard_variants.txt"
+            keyboard_variants = []
+            if keyboard_file.exists():
+                with open(keyboard_file, 'r', encoding='utf-8', errors='ignore') as f:
+                    for raw in f:
+                        line = raw.strip()
+                        if not line:
+                            continue
+                        domain = line.split('\t')[0].strip()
+                        if not domain:
+                            continue
+                        keyboard_variants.append(domain)
+                        item = variants_meta.setdefault(
+                            domain, {"domain": domain, "source_type": "unknown", "similarity": None}
+                        )
+                        item["source_type"] = "keyboard"
+
             # 读取高风险变体
             high_risk_file = domain_dir / "high_risk.txt"
             high_risk_domains = []
             if high_risk_file.exists():
                 with open(high_risk_file, 'r', encoding='utf-8', errors='ignore') as f:
-                    for line in f:
-                        if line.strip():
-                            parts = line.strip().split('\t')
-                            if len(parts) >= 2:
-                                domain = parts[2] if len(parts) >= 3 else parts[1]
-                                high_risk_domains.append(domain)
-            
-            # 读取键盘变体
-            keyboard_file = domain_dir / "keyboard_variants.txt"
-            keyboard_variants = []
-            if keyboard_file.exists():
-                with open(keyboard_file, 'r', encoding='utf-8', errors='ignore') as f:
-                    for line in f:
-                        if line.strip():
-                            parts = line.strip().split('\t')
-                            if len(parts) >= 1:
-                                keyboard_variants.append(parts[0])
-            
-            # 读取所有变体
-            all_variants_file = domain_dir / "all_variants.txt"
-            all_variants = []
-            if all_variants_file.exists():
-                with open(all_variants_file, 'r', encoding='utf-8', errors='ignore') as f:
-                    for line in f:
-                        if line.strip():
-                            parts = line.strip().split('\t')
-                            if len(parts) >= 2:
-                                all_variants.append(parts[1])
+                    for raw in f:
+                        line = raw.strip()
+                        if not line:
+                            continue
+                        lower_line = line.lower()
+                        if lower_line.startswith("sim\t") or lower_line.startswith("type\t"):
+                            continue
+
+                        parts = line.split('\t')
+                        sim = None
+                        domain = None
+                        if len(parts) >= 3:
+                            try:
+                                sim = float(parts[0])
+                                domain = parts[1]
+                            except Exception:
+                                if len(parts) >= 4:
+                                    try:
+                                        sim = float(parts[1])
+                                    except Exception:
+                                        sim = None
+                                    domain = parts[2]
+                        if not domain:
+                            continue
+                        domain = domain.strip()
+                        if not domain:
+                            continue
+
+                        high_risk_domains.append(domain)
+                        item = variants_meta.setdefault(
+                            domain, {"domain": domain, "source_type": "unknown", "similarity": None}
+                        )
+                        item["is_high_risk"] = True
+                        if sim is not None:
+                            item["similarity"] = max(0.0, min(1.0, float(sim)))
+
+            variant_details = []
+            for domain in punycode_domains:
+                item = variants_meta.get(domain, {"domain": domain, "source_type": "unknown", "similarity": None})
+                item["is_high_risk"] = bool(item.get("is_high_risk", False) or domain in high_risk_domains)
+                variant_details.append(item)
             
             return {
                 "success": True,
@@ -190,6 +290,7 @@ class XdigEnhancedAnalyzer:
                 "high_risk_domains": high_risk_domains,
                 "keyboard_domains": keyboard_variants,
                 "all_domains": all_variants,
+                "variant_details": variant_details,
                 "generated_time": datetime.fromtimestamp(punycode_file.stat().st_mtime).isoformat()
             }
             
@@ -199,13 +300,10 @@ class XdigEnhancedAnalyzer:
     def _generate_simple_variants(self, original_domain: str, domain_dir: Path) -> Dict:
         """生成简单的变体（备用方法）"""
         try:
-            # 解析域名
-            if '.' not in original_domain:
-                return {"success": False, "error": "域名格式不正确"}
-            
-            parts = original_domain.split('.')
-            sld = parts[0]
-            tld = '.'.join(parts[1:])
+            # 尽可能宽松处理输入，避免因格式限制直接失败
+            parts = original_domain.split('.', 1)
+            sld = (parts[0] or original_domain).strip() or "domain"
+            tld = parts[1] if len(parts) > 1 and parts[1] else "com"
             
             # 生成一些简单变体
             variants = []
@@ -262,6 +360,15 @@ class XdigEnhancedAnalyzer:
             
             # 去重
             variants = list(set(variants))
+            variant_details = [
+                {
+                    "domain": variant,
+                    "source_type": "unknown",
+                    "similarity": 0.8,
+                    "is_high_risk": idx < min(20, len(variants)),
+                }
+                for idx, variant in enumerate(variants)
+            ]
             
             # 创建目录
             domain_dir.mkdir(exist_ok=True)
@@ -293,6 +400,7 @@ class XdigEnhancedAnalyzer:
                 "high_risk_variants": min(20, len(variants)),
                 "punycode_domains": variants,
                 "high_risk_domains": variants[:min(20, len(variants))],
+                "variant_details": variant_details,
                 "generated_time": datetime.now().isoformat()
             }
             
@@ -629,6 +737,11 @@ class XdigEnhancedAnalyzer:
             Dict: 综合分析结果
         """
         try:
+            try:
+                original_domain = normalize_domain_input(original_domain)
+            except DomainInputError as e:
+                return {"success": False, "error": f"域名输入无效: {e}"}
+
             # 检查缓存
             cache_key = f"{original_domain}_{threshold}"
             if cache_key in self._analysis_cache:
@@ -963,6 +1076,10 @@ class XdigEnhancedAnalyzer:
     def get_previous_analyses(self, original_domain: str, limit: int = 10) -> List[Dict]:
         """获取之前的分析结果"""
         try:
+            try:
+                original_domain = normalize_domain_input(original_domain)
+            except DomainInputError:
+                original_domain = (original_domain or "").strip().lower()
             safe_name = self._sanitize_filename(original_domain)
             analysis_dir = self.monitoring_results_dir / "xdig_analysis" / safe_name
             

@@ -76,6 +76,24 @@ class HTTPScan(Base):
     def __repr__(self):
         return f"<HTTPScan(id={self.id}, domain_id={self.domain_id}, risk_score={self.http_risk_score})>"
 
+
+class WebScreenshot(Base):
+    """Active probing screenshot and page metadata table"""
+    __tablename__ = "web_screenshots"
+
+    id = Column(Integer, primary_key=True)
+    domain = Column(String(255), nullable=False, index=True)
+    screenshot_path = Column(Text, nullable=False)
+    perceptual_hash = Column(String(64))
+    ssim_score = Column(Float)
+    page_title = Column(Text)
+    status_code = Column(Integer)
+    load_ms = Column(Integer)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    def __repr__(self):
+        return f"<WebScreenshot(id={self.id}, domain='{self.domain}', status={self.status_code})>"
+
 class WhoisRecord(Base):
     """WHOIS information table"""
     __tablename__ = 'whois_records'

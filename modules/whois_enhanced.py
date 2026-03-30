@@ -4,6 +4,8 @@
 """
 
 import whois
+import ipaddress
+import socket
 import json
 import time
 from datetime import datetime
@@ -156,15 +158,42 @@ def query_domain_whois_structured(domain: str, timeout: int = 10) -> Dict:
     start_time = time.time()
     
     try:
+        # 如果是 IP 地址，WHOIS 对域名有效，IP 通常需要 RDAP/WHOIS-IP；此处我们执行反向 DNS 做轻量化处理
+        try:
+            ipaddress.ip_address(domain)
+            # 反向 DNS
+            try:
+                host, aliases, _ = socket.gethostbyaddr(domain)
+                reverse_names = [host] + aliases
+            except Exception:
+                reverse_names = []
+
+            result = {
+                'domain': domain,
+                'query_timestamp': datetime.now().isoformat(),
+                'query_duration_seconds': round(time.time() - start_time, 2),
+                'status': 'skipped',
+                'note': 'input is an IP address; WHOIS domain lookup skipped. Performed reverse DNS instead.',
+                'reverse_dns': reverse_names,
+                'whois_info': {},
+                'whois_risk_score': 0.0,
+                'risk_level': 'unknown'
+            }
+            logger.info(f"WHOIS 跳过（IP）: {domain}, reverse_dns: {reverse_names}")
+            return result
+        except ValueError:
+            # 不是IP，继续域名 WHOIS
+            pass
+
         # 查询WHOIS
         w = whois.whois(domain)
-        
+
         # 提取结构化信息
         whois_info = extract_whois_fields(w)
-        
+
         # 计算风险评分
         whois_risk_score = calculate_whois_risk_score(whois_info)
-        
+
         result = {
             'domain': domain,
             'query_timestamp': datetime.now().isoformat(),
@@ -174,10 +203,10 @@ def query_domain_whois_structured(domain: str, timeout: int = 10) -> Dict:
             'whois_risk_score': whois_risk_score,
             'risk_level': 'high' if whois_risk_score > 15 else 'medium' if whois_risk_score > 8 else 'low'
         }
-        
+
         logger.info(f"WHOIS查询成功: {domain}, 风险评分: {whois_risk_score}")
         return result
-        
+
     except Exception as e:
         logger.error(f"WHOIS查询失败 {domain}: {e}")
         return {

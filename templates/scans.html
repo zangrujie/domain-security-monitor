@@ -262,12 +262,37 @@
         </div>
     </div>
 </div>
+
+<!-- 扫描日志详情 -->
+<div class="modal" id="scan-log-modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3 id="scan-log-title">扫描日志</h3>
+            <button class="btn-close" onclick="closeScanLogModal()">
+                <i class="fas fa-times"></i>
+            </button>
+        </div>
+        <div class="modal-body">
+            <div id="scan-log-meta" class="form-text" style="margin-bottom: 12px;"></div>
+            <div id="scan-log-list" class="log-container" style="max-height: 360px; overflow-y: auto;"></div>
+            <div style="margin-top: 12px;">
+                <label class="form-label" style="margin-bottom: 6px;">结果摘要</label>
+                <pre id="scan-result-json" style="background:#f8f9fa; border:1px solid #eaeaea; border-radius:8px; padding:10px; max-height:240px; overflow:auto; font-size:12px;"></pre>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" onclick="closeScanLogModal()">关闭</button>
+        </div>
+    </div>
+</div>
 {% endblock %}
 
 {% block extra_js %}
 <script>
 // 全局变量
 let autoScrollEnabled = true;
+let refreshTimer = null;
+let allScans = [];
 let scanStats = {
     running: 0,
     completed: 0,
@@ -277,8 +302,8 @@ let scanStats = {
 
 // 页面加载完成后初始化
 document.addEventListener('DOMContentLoaded', function() {
-    loadScanStats();
-    loadScans();
+    refreshScansData(false);
+    refreshTimer = setInterval(() => refreshScansData(true), 5000);
     
     // 监听扫描类型变化
     document.getElementById('scan-type').addEventListener('change', function() {
@@ -287,20 +312,32 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 });
 
-// 加载扫描统计
-async function loadScanStats() {
+window.addEventListener('beforeunload', () => {
+    if (refreshTimer) {
+        clearInterval(refreshTimer);
+        refreshTimer = null;
+    }
+});
+
+async function refreshScansData(silent = true) {
     try {
-        // 模拟API调用
-        scanStats = {
-            running: 1,
-            completed: 3,
-            failed: 0,
-            pending: 2
-        };
-        
+        const response = await fetch('/api/scan/tasks?limit=500');
+        if (!response.ok) throw new Error('扫描任务接口请求失败');
+
+        const payload = await response.json();
+        if (!payload.success) throw new Error(payload.error || '扫描任务接口返回失败');
+
+        const data = payload.data || {};
+        allScans = data.tasks || [];
+        scanStats = data.stats || { running: 0, completed: 0, failed: 0, pending: 0 };
+
         updateScanStats();
+        applyScansFilterAndRender();
     } catch (error) {
-        console.error('加载扫描统计失败:', error);
+        console.error('加载扫描任务数据失败:', error);
+        if (!silent) {
+            showNotification('加载扫描任务失败: ' + error.message, 'danger');
+        }
     }
 }
 
@@ -319,122 +356,87 @@ function updateScanStats() {
     document.getElementById('pending-change').textContent = scanStats.pending;
 }
 
-// 加载扫描任务列表
-async function loadScans() {
+function applyScansFilterAndRender() {
     const tableBody = document.getElementById('scans-table');
     if (!tableBody) return;
-    
-    try {
-        // 模拟数据
-        const scans = [
-            {
-                id: 'scan_123456',
-                domain: 'deepseek.com',
-                type: 'full',
-                status: 'completed',
-                start_time: '2026-02-09 20:00:00',
-                end_time: '2026-02-09 20:15:00',
-                progress: 100
-            },
-            {
-                id: 'scan_123457',
-                domain: 'example.com',
-                type: 'http',
-                status: 'running',
-                start_time: '2026-02-09 20:30:00',
-                end_time: '',
-                progress: 65
-            },
-            {
-                id: 'scan_123458',
-                domain: 'test.com',
-                type: 'dns',
-                status: 'pending',
-                start_time: '',
-                end_time: '',
-                progress: 0
-            },
-            {
-                id: 'scan_123459',
-                domain: 'google.com',
-                type: 'whois',
-                status: 'failed',
-                start_time: '2026-02-09 19:45:00',
-                end_time: '2026-02-09 19:50:00',
-                progress: 30
-            }
-        ];
-        
-        let html = '';
-        scans.forEach(scan => {
-            const statusClass = getStatusClass(scan.status);
-            const statusText = getStatusText(scan.status);
-            const typeText = getScanTypeText(scan.type);
-            
-            html += `
-                <tr>
-                    <td>
-                        <code>${scan.id}</code>
-                    </td>
-                    <td>${escapeHtml(scan.domain)}</td>
-                    <td>${typeText}</td>
-                    <td>
-                        <span class="status-badge ${statusClass}">${statusText}</span>
-                    </td>
-                    <td>${escapeHtml(scan.start_time || '未开始')}</td>
-                    <td>${escapeHtml(scan.end_time || '进行中')}</td>
-                    <td>
-                        <div class="progress-bar">
-                            <div class="progress-fill" style="width: ${scan.progress}%"></div>
-                            <span class="progress-text">${scan.progress}%</span>
-                        </div>
-                    </td>
-                    <td>
-                        <div class="action-buttons">
-                            ${scan.status === 'running' ? `
-                                <button class="btn btn-sm btn-danger" onclick="stopScan('${scan.id}')">
-                                    <i class="fas fa-stop"></i>
-                                </button>
-                            ` : ''}
-                            <button class="btn btn-sm btn-secondary" onclick="viewScanLogs('${scan.id}')">
-                                <i class="fas fa-file-alt"></i>
-                            </button>
-                            ${scan.status === 'completed' ? `
-                                <button class="btn btn-sm btn-secondary" onclick="downloadScanResults('${scan.id}')">
-                                    <i class="fas fa-download"></i>
-                                </button>
-                            ` : ''}
-                        </div>
-                    </td>
-                </tr>
-            `;
-        });
-        
-        tableBody.innerHTML = html;
-        
-    } catch (error) {
-        console.error('加载扫描任务失败:', error);
+
+    const statusFilter = document.getElementById('scan-status-filter').value;
+    const typeFilter = document.getElementById('scan-type-filter').value;
+    const scans = allScans.filter((scan) => {
+        const normalizedStatus = normalizeStatus(scan.status);
+        const normalizedType = (scan.scan_type || 'full').toLowerCase();
+        if (statusFilter && normalizedStatus !== statusFilter) return false;
+        if (typeFilter && normalizedType !== typeFilter) return false;
+        return true;
+    });
+
+    if (scans.length === 0) {
         tableBody.innerHTML = `
             <tr>
                 <td colspan="8" class="empty-state">
-                    <i class="fas fa-exclamation-triangle"></i>
-                    <p>加载失败: ${error.message}</p>
-                    <button class="btn btn-secondary" onclick="loadScans()">
-                        <i class="fas fa-redo"></i> 重试
-                    </button>
+                    <i class="fas fa-inbox"></i>
+                    <p>暂无符合条件的扫描任务</p>
                 </td>
             </tr>
         `;
+        return;
     }
+
+    let html = '';
+    scans.forEach(scan => {
+        const normalizedStatus = normalizeStatus(scan.status);
+        const statusClass = getStatusClass(normalizedStatus);
+        const statusText = getStatusText(normalizedStatus);
+        const typeText = getScanTypeText(scan.scan_type || 'full');
+        const progress = Math.max(0, Math.min(100, Number(scan.progress || 0)));
+        const startedAt = formatDateTime(scan.started_at || scan.created_at);
+        const finishedAt = scan.finished_at ? formatDateTime(scan.finished_at) : '进行中';
+
+        html += `
+            <tr>
+                <td>
+                    <code>${escapeHtml(scan.scan_id || '-')}</code>
+                </td>
+                <td>${escapeHtml(scan.domain || '-')}</td>
+                <td>${typeText}</td>
+                <td>
+                    <span class="status-badge ${statusClass}">${statusText}</span>
+                </td>
+                <td>${escapeHtml(startedAt || '未开始')}</td>
+                <td>${escapeHtml(finishedAt)}</td>
+                <td>
+                    <div class="progress-bar">
+                        <div class="progress-fill" style="width: ${progress}%"></div>
+                        <span class="progress-text">${progress}%</span>
+                    </div>
+                </td>
+                <td>
+                    <div class="action-buttons">
+                        ${normalizedStatus === 'running' ? `
+                            <button class="btn btn-sm btn-danger" onclick="stopScan('${scan.scan_id}')">
+                                <i class="fas fa-stop"></i>
+                            </button>
+                        ` : ''}
+                        <button class="btn btn-sm btn-secondary" onclick="viewScanLogs('${scan.scan_id}')">
+                            <i class="fas fa-file-alt"></i>
+                        </button>
+                        ${normalizedStatus === 'completed' ? `
+                            <button class="btn btn-sm btn-secondary" onclick="downloadScanResults('${scan.scan_id}')">
+                                <i class="fas fa-download"></i>
+                            </button>
+                        ` : ''}
+                    </div>
+                </td>
+            </tr>
+        `;
+    });
+
+    tableBody.innerHTML = html;
 }
 
 // 过滤扫描任务
 function filterScans() {
-    const statusFilter = document.getElementById('scan-status-filter').value;
-    const typeFilter = document.getElementById('scan-type-filter').value;
-    
-    // 在实际应用中，这里应该重新加载筛选后的数据
-    showNotification('筛选功能开发中', 'info');
+    applyScansFilterAndRender();
 }
 
 // 提交新建扫描任务
@@ -474,8 +476,7 @@ async function submitNewScan(event) {
             
             // 刷新列表
             setTimeout(() => {
-                loadScanStats();
-                loadScans();
+                refreshScansData(false);
             }, 1000);
         } else {
             throw new Error(data.error || '扫描启动失败');
@@ -508,8 +509,52 @@ function stopAllScans() {
 }
 
 // 查看扫描日志
-function viewScanLogs(scanId) {
-    showNotification(`查看扫描日志: ${scanId}（开发中）`, 'info');
+async function viewScanLogs(scanId) {
+    const modal = document.getElementById('scan-log-modal');
+    const title = document.getElementById('scan-log-title');
+    const meta = document.getElementById('scan-log-meta');
+    const list = document.getElementById('scan-log-list');
+    const resultBox = document.getElementById('scan-result-json');
+    if (!modal || !title || !meta || !list || !resultBox) return;
+
+    title.textContent = `扫描日志 - ${scanId}`;
+    meta.textContent = '加载中...';
+    list.innerHTML = '<div class="log-entry info"><span class="log-time">--:--:--</span><span class="log-level">INFO</span><span class="log-message">正在加载日志...</span></div>';
+    resultBox.textContent = '';
+    modal.style.display = 'block';
+
+    try {
+        const response = await fetch(`/api/scan/logs/${encodeURIComponent(scanId)}`);
+        const payload = await response.json();
+        if (!response.ok || !payload.success) {
+            throw new Error(payload.error || '日志加载失败');
+        }
+        const data = payload.data || {};
+        meta.textContent = `目标域名: ${data.domain || '-'} ｜ 类型: ${getScanTypeText(data.scan_type || 'full')} ｜ 状态: ${getStatusText(normalizeStatus(data.status || 'unknown'))}`;
+
+        const logs = data.logs || [];
+        if (!logs.length) {
+            list.innerHTML = '<div class="log-entry warning"><span class="log-time">--:--:--</span><span class="log-level">WARN</span><span class="log-message">暂无日志</span></div>';
+        } else {
+            list.innerHTML = logs.map(item => {
+                const level = String(item.level || 'INFO').toUpperCase();
+                const time = formatTime(item.timestamp);
+                const cls = level === 'ERROR' ? 'danger' : (level === 'SUCCESS' ? 'success' : (level === 'WARNING' ? 'warning' : 'info'));
+                return `<div class="log-entry ${cls}"><span class="log-time">${escapeHtml(time)}</span><span class="log-level">${escapeHtml(level)}</span><span class="log-message">${escapeHtml(item.message || '')}</span></div>`;
+            }).join('');
+        }
+
+        resultBox.textContent = data.result ? JSON.stringify(data.result, null, 2) : '无结果数据';
+    } catch (error) {
+        meta.textContent = '';
+        list.innerHTML = `<div class="log-entry danger"><span class="log-time">--:--:--</span><span class="log-level">ERROR</span><span class="log-message">${escapeHtml(error.message)}</span></div>`;
+        resultBox.textContent = '';
+    }
+}
+
+function closeScanLogModal() {
+    const modal = document.getElementById('scan-log-modal');
+    if (modal) modal.style.display = 'none';
 }
 
 // 下载扫描结果
@@ -519,8 +564,7 @@ function downloadScanResults(scanId) {
 
 // 刷新扫描列表
 function refreshScans() {
-    loadScanStats();
-    loadScans();
+    refreshScansData(false);
     showNotification('扫描任务列表已刷新', 'info');
 }
 
@@ -548,6 +592,7 @@ function getStatusClass(status) {
         case 'running': return 'status-running';
         case 'completed': return 'status-success';
         case 'failed': return 'status-danger';
+        case 'queued':
         case 'pending': return 'status-warning';
         default: return 'status-secondary';
     }
@@ -559,6 +604,7 @@ function getStatusText(status) {
         case 'running': return '运行中';
         case 'completed': return '已完成';
         case 'failed': return '失败';
+        case 'queued':
         case 'pending': return '排队中';
         default: return '未知';
     }
@@ -575,6 +621,35 @@ function getScanTypeText(type) {
         case 'custom': return '自定义';
         default: return '未知';
     }
+}
+
+function normalizeStatus(status) {
+    return status === 'queued' ? 'pending' : (status || 'unknown');
+}
+
+function formatDateTime(value) {
+    if (!value) return '';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return value;
+    return date.toLocaleString('zh-CN', { hour12: false });
+}
+
+function escapeHtml(text) {
+    const map = {
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;'
+    };
+    return String(text || '').replace(/[&<>"']/g, (m) => map[m]);
+}
+
+function formatTime(value) {
+    if (!value) return '--:--:--';
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return value;
+    return d.toLocaleString('zh-CN', { hour12: false });
 }
 </script>
 {% endblock %}

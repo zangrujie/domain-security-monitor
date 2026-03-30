@@ -28,7 +28,7 @@ DB_PORT=5432
 DB_NAME=domain_security
 
 # 威胁情报API密钥配置
-VT_API_KEY=your_actual_virustotal_api_key_here  # ← 替换为您的真实API密钥
+VT_API_KEY=1f5e342d0b68bf33c9903322a7072f51df6cca1becdd1d6404c5aab60a371843  # ← 替换为您的真实API密钥
 # URLHAUS_API_KEY=not_required  # URLhaus无需API密钥
 ```
 

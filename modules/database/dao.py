@@ -8,10 +8,12 @@ from typing import List, Dict, Optional, Any
 from datetime import datetime, timedelta
 from sqlalchemy.orm import Session, Query
 from sqlalchemy import or_, and_, desc, func
+import subprocess
+import sys
 
 from .models import (
     Domain, DNSScan, HTTPScan, WhoisRecord, 
-    ThreatIntelligence, RiskAssessment
+    ThreatIntelligence, RiskAssessment, WebScreenshot
 )
 from .connection import DatabaseSession
 
@@ -171,6 +173,25 @@ class ScanDAO:
         return session.query(HTTPScan).filter(
             HTTPScan.domain_id == domain_id
         ).order_by(desc(HTTPScan.scan_timestamp)).limit(limit).all()
+
+    @staticmethod
+    def save_web_screenshot(session: Session, screenshot_data: Dict) -> WebScreenshot:
+        """
+        保存主动探测截图及页面元数据
+        """
+        row = WebScreenshot(
+            domain=screenshot_data.get("domain", ""),
+            screenshot_path=screenshot_data.get("screenshot_path", ""),
+            perceptual_hash=screenshot_data.get("perceptual_hash"),
+            ssim_score=screenshot_data.get("ssim_score"),
+            page_title=screenshot_data.get("page_title"),
+            status_code=screenshot_data.get("status_code"),
+            load_ms=screenshot_data.get("load_ms"),
+            created_at=datetime.utcnow(),
+        )
+        session.add(row)
+        logger.debug(f"保存主动探测截图: domain={row.domain}, path={row.screenshot_path}")
+        return row
 
 class ThreatIntelDAO:
     """威胁情报数据访问对象"""
@@ -357,6 +378,14 @@ class WhoisDAO:
         def parse_date(date_str):
             if not date_str:
                 return None
+            if isinstance(date_str, datetime):
+                return date_str
+            if isinstance(date_str, (list, tuple)):
+                for item in date_str:
+                    parsed = parse_date(item)
+                    if parsed is not None:
+                        return parsed
+                return None
             try:
                 return datetime.fromisoformat(date_str.replace('Z', '+00:00'))
             except:
@@ -461,6 +490,21 @@ class DomainDataManager:
                 
                 session.commit()
                 logger.info(f"完整监控结果已保存: {domain}")
+
+                # 异步触发前端使用的预聚合刷新与缓存失效
+                try:
+                    # 通过独立 Python 进程调用 web_app 的 manager，避免在当前进程产生循环导入
+                    safe_target = (original_target or "").replace("'", "\\'")
+                    cmd = (
+                        "from web_app import manager; "
+                        f"manager.invalidate_analysis_cache('{safe_target}'); "
+                        f"manager.refresh_original_target_summary('{safe_target}')"
+                    )
+                    subprocess.Popen([sys.executable, "-c", cmd], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    logger.debug(f"已异步请求刷新 original_target_summary: {original_target}")
+                except Exception as e:
+                    logger.warning(f"触发 original_target_summary 刷新失败: {e}")
+
                 return stats
                 
             except Exception as e:

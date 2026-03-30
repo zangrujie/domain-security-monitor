@@ -31,8 +31,8 @@
         <div class="form-group">
             <label for="target-domain">目标域名</label>
             <input type="text" class="form-control" id="target-domain" 
-                   placeholder="输入原始域名，例如：deepseek.com">
-            <small class="form-text text-muted">请输入您要分析的原始域名</small>
+                   placeholder="输入原始域名，例如：deepseek.com 或 https://deepseek.com/login">
+            <small class="form-text text-muted">支持 URL、Unicode、带端口/路径/账号信息等输入形式</small>
         </div>
         <div class="form-group">
             <label for="analysis-mode">分析模式</label>
@@ -536,6 +536,41 @@ const pageSize = 20;
 let filteredDomains = [];
 let currentTab = 'overview';
 let viewMode = 'grid';
+window.overviewVariantsChart = null;
+window.overviewRiskChart = null;
+window.detailedVariantsChart = null;
+window.whoisChart = null;
+
+function destroyChartIfExists(instanceRefName, canvasId) {
+    // 优先销毁保存的实例引用
+    const instance = window[instanceRefName];
+    if (instance && typeof instance.destroy === 'function') {
+        instance.destroy();
+        window[instanceRefName] = null;
+    }
+
+    // 兜底：按 canvas 获取 Chart.js 内部实例并销毁
+    const canvas = document.getElementById(canvasId);
+    if (canvas && typeof Chart !== 'undefined' && typeof Chart.getChart === 'function') {
+        const leaked = Chart.getChart(canvas);
+        if (leaked && typeof leaked.destroy === 'function') {
+            leaked.destroy();
+        }
+    }
+}
+
+function forceDestroyKnownCharts() {
+    const ids = ['overviewVariantsChart', 'overviewRiskChart', 'variantsChart', 'whoisChart'];
+    if (typeof Chart === 'undefined' || typeof Chart.getChart !== 'function') return;
+    for (const id of ids) {
+        const canvas = document.getElementById(id);
+        if (!canvas) continue;
+        const chart = Chart.getChart(canvas);
+        if (chart && typeof chart.destroy === 'function') {
+            chart.destroy();
+        }
+    }
+}
 
 // 页面加载完成后初始化
 document.addEventListener('DOMContentLoaded', function() {
@@ -731,12 +766,6 @@ async function startAnalysis() {
     
     if (!domain) {
         showNotification('请输入要分析的域名', 'warning');
-        return;
-    }
-    
-    // 验证域名格式
-    if (!domain.includes('.')) {
-        showNotification('域名格式不正确，请包含顶级域名', 'warning');
         return;
     }
     
@@ -1157,6 +1186,7 @@ function nextPage() {
 function renderDomainExamples() {
     const gridContainer = document.getElementById('grid-view');
     const listContainer = document.getElementById('variants-list-table');
+    const filterType = document.getElementById('variant-type-filter')?.value || 'all';
     
     if (!analysisData.variants || !analysisData.variants.punycode_domains) {
         gridContainer.innerHTML = `
@@ -1176,17 +1206,58 @@ function renderDomainExamples() {
         return;
     }
     
-    const domains = analysisData.variants.punycode_domains.slice(0, 20); // 最多显示20个
+    const details = analysisData.variants.variant_details || [];
+    const detailMap = new Map(details.map(item => [item.domain, item]));
+    let domains = analysisData.variants.punycode_domains.map((domain) => {
+        const detail = detailMap.get(domain) || {};
+        const sourceType = detail.source_type || 'unknown';
+        let similarity = detail.similarity;
+        if (similarity === null || similarity === undefined || Number.isNaN(Number(similarity))) {
+            similarity = 0;
+        }
+        similarity = Math.max(0, Math.min(1, Number(similarity)));
+        return {
+            domain,
+            sourceType,
+            similarity,
+        };
+    });
+
+    if (filterType === 'punycode') {
+        domains = domains.filter(item => item.sourceType === 'visual');
+    } else if (filterType === 'keyboard') {
+        domains = domains.filter(item => item.sourceType === 'keyboard');
+    }
+
+    domains = domains.slice(0, 20); // 最多显示20个
+    if (domains.length === 0) {
+        gridContainer.innerHTML = `
+            <div class="empty-state">
+                <i class="fas fa-filter"></i>
+                <p>当前筛选条件下无匹配变体</p>
+            </div>
+        `;
+        listContainer.innerHTML = `
+            <tr>
+                <td colspan="5" class="empty-state">
+                    <i class="fas fa-filter"></i>
+                    <p>当前筛选条件下无匹配变体</p>
+                </td>
+            </tr>
+        `;
+        return;
+    }
     const highRiskDomains = analysisData.variants.high_risk_domains || [];
     
     // 网格视图
     let gridHtml = '';
-    domains.forEach((domain, index) => {
-        const isPunycode = domain.includes('xn--');
+    domains.forEach((item, index) => {
+        const domain = item.domain;
+        const isVisual = item.sourceType === 'visual';
         const isHighRisk = highRiskDomains.includes(domain);
         
         gridHtml += `
-            <div class="domain-example ${isPunycode ? 'punycode' : ''} ${isHighRisk ? 'high-risk' : ''}">
+            <div class="domain-example ${isVisual ? 'punycode' : ''} ${isHighRisk ? 'high-risk' : ''}">
                 <div class="example-header">
                     <span class="example-number">${index + 1}</span>
                     <button class="btn btn-sm btn-secondary copy-btn" onclick="copyDomain('${domain}')">
@@ -1197,8 +1268,8 @@ function renderDomainExamples() {
                     <code>${escapeHtml(domain)}</code>
                 </div>
                 <div class="example-type">
-                    <span class="type-badge ${isPunycode ? 'visual' : 'keyboard'}">
-                        ${isPunycode ? '字形相似' : '键盘布局'}
+                    <span class="type-badge ${isVisual ? 'visual' : 'keyboard'}">
+                        ${isVisual ? '字形相似' : '键盘布局'}
                     </span>
                     ${isHighRisk ? '<span class="risk-indicator high"><i class="fas fa-exclamation-triangle"></i></span>' : ''}
                 </div>
@@ -1210,9 +1281,11 @@ function renderDomainExamples() {
     
     // 列表视图
     let listHtml = '';
-    domains.forEach((domain, index) => {
-        const isPunycode = domain.includes('xn--');
+    domains.forEach((item, index) => {
+        const domain = item.domain;
+        const isVisual = item.sourceType === 'visual';
         const isHighRisk = highRiskDomains.includes(domain);
+        const simPercent = Math.round(item.similarity * 100);
         
         listHtml += `
             <tr>
@@ -1222,16 +1295,16 @@ function renderDomainExamples() {
                     ${isHighRisk ? '<span class="high-risk-tag">高风险</span>' : ''}
                 </td>
                 <td>
-                    <span class="type-badge ${isPunycode ? 'visual' : 'keyboard'}">
-                        ${isPunycode ? '字形相似' : '键盘布局'}
+                    <span class="type-badge ${isVisual ? 'visual' : 'keyboard'}">
+                        ${isVisual ? '字形相似' : '键盘布局'}
                     </span>
                 </td>
                 <td>
                     <div class="similarity-score">
                         <div class="score-bar-small">
-                            <div class="score-fill-small" style="width: ${isHighRisk ? '85' : '65'}%"></div>
+                            <div class="score-fill-small" style="width: ${simPercent}%"></div>
                         </div>
-                        <span class="score-value-small">${isHighRisk ? '85' : '65'}</span>
+                        <span class="score-value-small">${simPercent}</span>
                     </div>
                 </td>
                 <td>
@@ -1250,9 +1323,7 @@ function renderDomainExamples() {
 
 // 过滤变体
 function filterVariants() {
-    const filterType = document.getElementById('variant-type-filter').value;
-    
-    // 重新渲染时会根据viewMode处理
+    // 重新渲染时在 renderDomainExamples 内根据筛选项处理
     if (analysisData && analysisData.variants) {
         renderDomainExamples();
     }
@@ -1287,6 +1358,9 @@ function toggleVariantView() {
 
 // 初始化图表
 function initCharts() {
+    // 兜底清理：避免历史实例残留导致 canvas 复用报错
+    forceDestroyKnownCharts();
+
     // 概览图表
     initOverviewCharts();
     
@@ -1299,11 +1373,14 @@ function initOverviewCharts() {
     // 变体统计图表
     const variantsCtx = document.getElementById('overviewVariantsChart');
     if (variantsCtx && analysisData) {
+        destroyChartIfExists('overviewVariantsChart', 'overviewVariantsChart');
+
         const totalVariants = analysisData.summary?.total_variants || 0;
         const activeDomains = analysisData.summary?.active_domains || 0;
         const inactiveDomains = totalVariants - activeDomains;
-        
-        new Chart(variantsCtx, {
+
+        // 创建新的图表实例并存储到全局变量
+        window.overviewVariantsChart = new Chart(variantsCtx, {
             type: 'pie',
             data: {
                 labels: ['活跃域名', '不活跃域名'],
@@ -1331,6 +1408,7 @@ function initOverviewCharts() {
     // 风险分布图表
     const riskCtx = document.getElementById('overviewRiskChart');
     if (riskCtx && analysisData.risk_assessment) {
+        destroyChartIfExists('overviewRiskChart', 'overviewRiskChart');
         const riskFactors = analysisData.risk_assessment.risk_factors || {};
         const factorLabels = ['变体数量', '高风险比例', '活跃域名', 'WHOIS风险'];
         const factorValues = [
@@ -1340,7 +1418,7 @@ function initOverviewCharts() {
             riskFactors.whois_risk || 0
         ];
         
-        new Chart(riskCtx, {
+        window.overviewRiskChart = new Chart(riskCtx, {
             type: 'radar',
             data: {
                 labels: factorLabels,
@@ -1376,11 +1454,12 @@ function initDetailedCharts() {
     // 变体统计图表
     const variantsCtx = document.getElementById('variantsChart');
     if (variantsCtx && analysisData) {
+        destroyChartIfExists('detailedVariantsChart', 'variantsChart');
         const totalVariants = analysisData.summary?.total_variants || 0;
         const activeDomains = analysisData.summary?.active_domains || 0;
         const highRiskVariants = analysisData.summary?.high_risk_variants || 0;
         
-        new Chart(variantsCtx, {
+        window.detailedVariantsChart = new Chart(variantsCtx, {
             type: 'bar',
             data: {
                 labels: ['总变体数', '活跃域名', '高风险变体'],
@@ -1411,14 +1490,15 @@ function initDetailedCharts() {
     // WHOIS统计图表
     const whoisCtx = document.getElementById('whoisChart');
     if (whoisCtx && analysisData.whois && analysisData.whois.analysis) {
+        destroyChartIfExists('whoisChart', 'whoisChart');
         const registrarAnalysis = analysisData.whois.analysis.registrar_analysis;
         if (registrarAnalysis && registrarAnalysis.registrars) {
             const topRegistrars = registrarAnalysis.registrars.slice(0, 5);
             const labels = topRegistrars.map(r => r.registrar);
             const data = topRegistrars.map(r => r.domain_count);
             
-            new Chart(whoisCtx, {
-                type: 'horizontalBar',
+            window.whoisChart = new Chart(whoisCtx, {
+                type: 'bar',
                 data: {
                     labels: labels,
                     datasets: [{
@@ -1449,14 +1529,19 @@ function initDetailedCharts() {
 }
 
 // 切换标签页
-function switchTab(tabName) {
+function switchTab(tabName, triggerEl = null) {
     currentTab = tabName;
     
     // 更新标签按钮状态
     document.querySelectorAll('.tab-btn').forEach(btn => {
         btn.classList.remove('active');
     });
-    event.target.classList.add('active');
+    const activeBtn =
+        triggerEl ||
+        document.querySelector(`.tab-btn[onclick*="switchTab('${tabName}')"]`);
+    if (activeBtn) {
+        activeBtn.classList.add('active');
+    }
     
     // 更新标签内容
     document.querySelectorAll('.tab-content').forEach(content => {
@@ -1484,8 +1569,22 @@ function exportAnalysis() {
         showNotification('没有可导出的分析数据', 'warning');
         return;
     }
-    
-    showNotification('导出报告功能开发中', 'info');
+
+    try {
+        const filename = `xdig_analysis_${(analysisData.original_domain || 'domain').replace(/[^a-zA-Z0-9._-]/g, '_')}_${Date.now()}.json`;
+        const blob = new Blob([JSON.stringify(analysisData, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        showNotification('分析报告导出成功', 'success');
+    } catch (error) {
+        showNotification('导出失败: ' + error.message, 'danger');
+    }
 }
 
 // 复制域名
@@ -1519,12 +1618,20 @@ function viewDomainDetail(domain) {
 // 删除分析记录
 function deleteAnalysis(domain) {
     if (confirm(`确定要删除域名 ${domain} 的分析记录吗？`)) {
-        showNotification(`正在删除 ${domain} 的分析记录...`, 'info');
-        // 实际开发中需要调用后端API
-        setTimeout(() => {
+        fetch(`/api/xdig/historical-analysis/${encodeURIComponent(domain)}`, {
+            method: 'DELETE'
+        })
+        .then(response => response.json().then(data => ({ ok: response.ok, data })))
+        .then(({ ok, data }) => {
+            if (!ok || !data.success) {
+                throw new Error(data.error || '删除失败');
+            }
             showNotification(`已删除 ${domain} 的分析记录`, 'success');
             loadHistoricalAnalyses();
-        }, 1000);
+        })
+        .catch(error => {
+            showNotification(`删除失败: ${error.message}`, 'danger');
+        });
     }
 }
 

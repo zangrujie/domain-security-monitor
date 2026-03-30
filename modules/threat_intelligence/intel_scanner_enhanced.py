@@ -35,6 +35,8 @@ HIGH_RISK_TLDS = ['.top', '.xyz', '.club', '.win', '.bid', '.loan', '.date', '.t
 
 # API密钥从环境变量获取
 VT_API_KEY = os.getenv('VT_API_KEY')
+if isinstance(VT_API_KEY, str):
+    VT_API_KEY = VT_API_KEY.replace('\r', '').strip()
 URLHAUS_API_KEY = None  # URLhaus API可能不再公开
 
 class EnhancedThreatIntelligenceScanner:

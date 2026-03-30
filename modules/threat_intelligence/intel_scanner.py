@@ -13,6 +13,9 @@ import logging
 import hashlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import re
+import numpy as np
+from sklearn.linear_model import LinearRegression
+from sklearn.ensemble import RandomForestRegressor
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -35,8 +38,6 @@ def check_virustotal_simulated(domain: str) -> Dict:
     """
     模拟VirusTotal域名检查（实际使用需要API密钥）
     """
-    # 注意：这是模拟版本，实际使用时需要替换为真正的API调用
-    # 示例：https://developers.virustotal.com/reference/domain-info
     
     # 模拟检查逻辑
     time.sleep(0.1)  # 模拟API延迟
@@ -178,60 +179,57 @@ def check_domain_age_simulated(domain: str) -> Dict:
         'note': '实际年龄需要WHOIS查询'
     }
 
-def calculate_threat_risk_score(threat_results: Dict) -> float:
+def calculate_threat_risk_score(threat_results: Dict, weights: Dict) -> float:
     """
     计算威胁情报风险评分（0-100，越高风险越高）
-    权重分配：威胁情报20%（临时权重）
+    动态权重分配。
     """
     risk_factors = []
-    
-    # 1. VirusTotal信誉（40分）
+
+    # 1. VirusTotal信誉
     vt_result = threat_results.get('virustotal', {})
     if vt_result.get('status') == 'simulated_no_api_key':
-        # 模拟模式下，基于模拟分数
         rep_score = vt_result.get('reputation_score', 0.5)
         if rep_score < 0.3:
-            risk_factors.append(40)  # 信誉极差
+            risk_factors.append(weights['virustotal'] * 1.0)  # 信誉极差
         elif rep_score < 0.6:
-            risk_factors.append(20)  # 信誉较差
-        
+            risk_factors.append(weights['virustotal'] * 0.5)  # 信誉较差
+
         malicious_detections = vt_result.get('malicious_detections', 0)
         if malicious_detections >= 5:
-            risk_factors.append(35)
+            risk_factors.append(weights['virustotal'] * 0.875)
         elif malicious_detections >= 1:
-            risk_factors.append(15)
-    
-    # 2. URLhaus检测（30分）
+            risk_factors.append(weights['virustotal'] * 0.375)
+
+    # 2. URLhaus检测
     urlhaus_result = threat_results.get('urlhaus', {})
     if urlhaus_result.get('malicious'):
-        risk_factors.append(30)
-    
-    # 3. PhishTank检测（30分）
+        risk_factors.append(weights['urlhaus'])
+
+    # 3. PhishTank检测
     phishtank_result = threat_results.get('phishtank', {})
     if phishtank_result.get('phishing_suspected'):
-        risk_factors.append(20)
+        risk_factors.append(weights['phishtank'] * 0.67)
     if phishtank_result.get('known_phishing'):
-        risk_factors.append(30)
-    
-    # 4. TLD风险（25分）
+        risk_factors.append(weights['phishtank'])
+
+    # 4. TLD风险
     tld_result = threat_results.get('tld_analysis', {})
     if tld_result.get('risk_level') == 'high':
-        risk_factors.append(25)
-    
-    # 5. 域名年龄风险（15分）
+        risk_factors.append(weights['tld_risk'])
+
+    # 5. 域名年龄风险
     age_result = threat_results.get('domain_age', {})
     if age_result.get('estimated_age') == 'new':
-        risk_factors.append(15)
-    
-    # 6. 内部黑名单（40分）
+        risk_factors.append(weights['domain_age'])
+
+    # 6. 内部黑名单
     if threat_results.get('internal_blacklist', {}).get('listed'):
-        risk_factors.append(40)
-    
-    # 计算总分（威胁情报20%权重）
+        risk_factors.append(weights['internal_blacklist'])
+
+    # 计算总分
     total_risk = min(100, sum(risk_factors))
-    weighted_risk = total_risk * 0.20  # 威胁情报权重20%
-    
-    return round(weighted_risk, 2)
+    return round(total_risk, 2)
 
 def check_domain_reputation(domain: str) -> Dict:
     """
@@ -266,9 +264,24 @@ def check_domain_reputation(domain: str) -> Dict:
         
         # 6. 域名年龄分析
         threat_results['domain_age'] = check_domain_age_simulated(domain)
+
+        # 加载历史数据和目标评分
+        historical_data = [
+        {"virustotal": 40, "urlhaus": 30, "phishtank": 20, "tld_risk": 25, "domain_age": 15, "internal_blacklist": 40},
+        {"virustotal": 20, "urlhaus": 10, "phishtank": 30, "tld_risk": 10, "domain_age": 5, "internal_blacklist": 20},
+        # 更多历史数据...
+        ]
+        target_scores = [80, 50]  # 假设的目标风险评分
+
+        # 优化权重
+        optimized_weights = optimize_weights_with_ml(historical_data, target_scores)
+
+        # 计算综合风险评分
+        threat_risk_score = calculate_threat_risk_score(threat_results, optimized_weights)
+
         
         # 计算综合风险评分
-        threat_risk_score = calculate_threat_risk_score(threat_results)
+        #threat_risk_score = calculate_threat_risk_score(threat_results)
         
         result = {
             'domain': domain,
@@ -366,6 +379,35 @@ def scan_file(input_file: str, output_file: Optional[str] = None,
     logger.info(f"威胁情报检查完成: 高风险 {high_risk}, 中风险 {medium_risk}, 总计 {len(results)}")
     
     return results
+
+def optimize_weights_with_ml(historical_data: List[Dict[str, float]], target_scores: List[float]) -> Dict[str, float]:
+    """
+    使用随机森林回归模型优化威胁情报源的权重。
+    :param historical_data: 历史数据，包含每个情报源的分数。
+    :param target_scores: 目标风险评分列表。
+    :return: 优化后的权重字典。
+    """
+    try:
+        # 准备数据
+        feature_names = list(historical_data[0].keys())
+        X = np.array([[data[feature] for feature in feature_names] for data in historical_data])
+        y = np.array(target_scores)
+
+        # 使用随机森林回归模型
+        model = RandomForestRegressor(n_estimators=100, random_state=42)
+        model.fit(X, y)
+
+        # 获取特征重要性并归一化为权重
+        feature_importances = model.feature_importances_
+        total_importance = sum(feature_importances)
+        weights = {feature: round(importance / total_importance * 100, 2) for feature, importance in zip(feature_names, feature_importances)}
+
+        logger.info(f"优化后的权重: {weights}")
+        return weights
+
+    except Exception as e:
+        logger.error(f"权重优化失败: {e}")
+        return {feature: 1.0 for feature in historical_data[0].keys()}  # 返回默认权重
 
 def main():
     """

@@ -8,6 +8,11 @@ import requests
 import json
 import time
 from datetime import datetime
+import os
+from pathlib import Path
+from subprocess import Popen, PIPE
+import whois
+from dotenv import load_dotenv
 
 # 用户代理
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -15,6 +20,12 @@ USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTM
 # 创建会话
 session = requests.Session()
 session.headers.update({'User-Agent': USER_AGENT, 'Accept': 'application/json'})
+
+# 加载 .env 文件
+load_dotenv()
+
+# 获取 URLhaus API 密钥
+URLHAUS_API_KEY = os.getenv("URLHAUS_API_KEY")
 
 def test_api(url, method='GET', headers=None, params=None, test_domain="google.com", description=""):
     """测试API连接"""
@@ -76,23 +87,27 @@ def test_urlhaus_apis():
     # 测试URLhaus状态端点
     test_api(
         url="https://urlhaus-api.abuse.ch/v1/status/",
+        headers={"Authorization": f"Bearer {URLHAUS_API_KEY}"},
         description="URLhaus状态检查"
     )
     
     # 测试URLhaus域名检查（无认证）
     test_api(
         url=f"https://urlhaus-api.abuse.ch/v1/host/google.com/",
+        headers={"Authorization": f"Bearer {URLHAUS_API_KEY}"},
         description="URLhaus域名检查（无认证）"
     )
     
     # 测试不同的URLhaus端点
     test_api(
         url="https://urlhaus.abuse.ch/downloads/json_online/",
+        headers={"Authorization": f"Bearer {URLHAUS_API_KEY}"},
         description="URLhaus JSON数据下载"
     )
     
     test_api(
         url="https://urlhaus.abuse.ch/downloads/csv_online/",
+        headers={"Authorization": f"Bearer {URLHAUS_API_KEY}"},
         description="URLhaus CSV数据下载"
     )
 
@@ -371,27 +386,131 @@ CACHE_TTL_HOURS=1
     print("\n配置文件模板 (.env.template):")
     print(env_template)
 
-def main():
-    """主测试函数"""
-    print("威胁情报API可用性研究")
-    print("="*60)
-    print(f"测试时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print("="*60)
-    
-    # 运行测试
-    test_urlhaus_apis()
-    test_virustotal_apis()
-    test_alternative_apis()
-    test_open_source_intel()
-    test_local_dns_and_whois()
-    research_urlhaus_authentication()
-    
-    # 生成推荐
-    generate_recommendations()
-    
-    print("\n" + "="*60)
-    print("研究完成")
-    print("="*60)
+def generate_similar_domains(domain):
+    """生成相似域名"""
+    # 示例：简单生成域名变体
+    subdomains = ["www", "mail", "blog", "shop"]
+    tlds = [".com", ".net", ".org"]
+    similar_domains = []
 
+    for sub in subdomains:
+        for tld in tlds:
+            similar_domains.append(f"{sub}.{domain.split('.')[0]}{tld}")
+
+    return similar_domains
+
+def check_domain_existence(domains):
+    """使用xdig工具检测域名是否存在"""
+    existing_domains = []
+    for domain in domains:
+        try:
+            process = Popen(["xdig", domain], stdout=PIPE, stderr=PIPE)
+            stdout, stderr = process.communicate()
+            if b"status: NOERROR" in stdout:
+                existing_domains.append(domain)
+        except FileNotFoundError:
+            print(f"xdig 工具未找到，无法检测域名: {domain}")
+        except Exception as e:
+            print(f"检测域名 {domain} 时出错: {e}")
+
+    if not existing_domains:
+        print("未检测到任何存活的域名。")
+
+    return existing_domains
+
+def query_whois_info(domains):
+    """查询域名的注册信息"""
+    domain_info = []
+    for domain in domains:
+        try:
+            w = whois.whois(domain)
+            domain_info.append({
+                "domain": domain,
+                "registrar": w.registrar,
+                "creation_date": w.creation_date,
+                "expiration_date": w.expiration_date
+            })
+        except Exception as e:
+            print(f"查询WHOIS信息失败: {domain}, 错误: {e}")
+    return domain_info
+
+def calculate_risk_score(domain_info):
+    """计算域名的风险分数"""
+    for info in domain_info:
+        # 示例：简单的风险评分逻辑
+        if "google" in info["domain"]:
+            info["risk_score"] = 90
+        else:
+            info["risk_score"] = 50
+    return domain_info
+
+def process_domains(domain):
+    """整合所有功能"""
+    print("生成相似域名...")
+    similar_domains = generate_similar_domains(domain)
+
+    print("检测域名是否存在...")
+    existing_domains = check_domain_existence(similar_domains)
+
+    print("查询域名注册信息...")
+    domain_info = query_whois_info(existing_domains)
+
+    print("计算风险分数...")
+    risk_data = calculate_risk_score(domain_info)
+
+    print("处理完成，结果如下:")
+    for data in risk_data:
+        print(data)
+
+def process_and_save_query_results(query_id, domains):
+    """
+    处理查询并按原始域名分开保存结果。
+
+    Args:
+        query_id (str): 查询的唯一 ID。
+        domains (List[str]): 查询的原始域名列表。
+    """
+    from modules.data_pipeline import DataPipeline
+
+    base_dir = "d:/MySecurityProject"  # 项目根目录
+    pipeline = DataPipeline(base_dir)
+
+    # 模拟查询结果
+    results = []
+    for domain in domains:
+        # 假设每个域名的结果是域名加上 "_result"
+        results.append(f"{domain}_result")
+
+    # 保存查询结果
+    pipeline.save_query_results_by_domain(query_id, domains, results)
+
+    print(f"查询 {query_id} 的结果已保存。")
+
+def process_and_evaluate_domains():
+    """
+    处理存活域名并进行风险评估。
+    """
+    from modules.data_pipeline import DataPipeline
+
+    base_dir = "d:/MySecurityProject"  # 项目根目录
+    active_domains_file = f"{base_dir}/active_high_risk_domains.txt"
+    high_risk_output_file = f"{base_dir}/high_risk_evaluated_domains.txt"
+
+    def risk_model(domain):
+        """
+        简单的风险评估模型示例。
+        """
+        # 示例逻辑：如果域名包含 "malicious"，则为高风险
+        if "malicious" in domain:
+            return 'high'
+        return 'low'
+
+    pipeline = DataPipeline(base_dir)
+    high_risk_count = pipeline.evaluate_risk_for_active_domains(active_domains_file, risk_model, high_risk_output_file)
+
+    print(f"高风险域名评估完成，共 {high_risk_count} 个高风险域名。")
+
+# 示例调用
 if __name__ == "__main__":
-    main()
+    test_domain = "example.com"
+    process_domains(test_domain)
